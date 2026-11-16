@@ -1,12 +1,10 @@
 import AppKit
 import ServiceManagement
-import Sparkle
 import SwiftUI
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
-    private let updaterController = SPUStandardUpdaterController(startingUpdater: false, updaterDelegate: nil,
-                                                                 userDriverDelegate: nil)
+    private let updater = AppUpdater()
     private let controller = InputController()
     private lazy var hotkeys = HotkeyManager { [weak self] in self?.controller.toggleComposer() }
     private lazy var replyHotkey = HotkeyManager(signature: 0x49545252) { [weak self] in
@@ -55,10 +53,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         controller.replyShortcutAvailable = replyHotkey.register(.readReply)
         controller.restorePinnedPanel()
 
-        updaterController.startUpdater()
-        if updaterController.updater.automaticallyChecksForUpdates {
-            updaterController.updater.checkForUpdatesInBackground()
-        }
+        updater.start()
     }
 
     private func installEditMenu() {
@@ -163,9 +158,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let login = add(L10n.text("开机启动"), #selector(toggleLogin), to: menu)
         login.state = controller.settings.loginStatus == .enabled ? .on : .off
         menu.addItem(.separator())
-        let checkForUpdates = add(L10n.text("检查更新…"),
-                                  #selector(SPUStandardUpdaterController.checkForUpdates(_:)), to: menu)
-        checkForUpdates.target = updaterController
+        let checkForUpdates = add(L10n.text("检查更新…"), #selector(AppUpdater.checkForUpdates(_:)), to: menu)
+        checkForUpdates.target = updater
         add(L10n.text("关于 InputTranslator"), #selector(openAbout), to: menu)
         add(L10n.text("退出 InputTranslator"), #selector(quit), to: menu).keyEquivalent = "q"
     }
