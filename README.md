@@ -41,7 +41,7 @@ After connecting or repairing Codex CLI, enter `/hooks` in Codex and trust the I
 
 In a connected session, press **⌘⌥⇧Space** or select **Read Reply**. While the panel is visible, new completed replies are read and translated as they arrive. Switch between **Translation** and **Original** to read either version. **⌘R** reads the latest reply, **⌘↵** copies the translation, and **Esc** returns to the previous app. **Read Clipboard** or **⌘⇧V** translates a reply you copy manually.
 
-The app matches replies to the terminal's foreground process group. It keeps each session's latest completed reply in a private temporary directory and clears it when the session ends. Hook input is limited to 4 MiB, and the reply cache is limited to 16 MiB. For SSH or tmux sessions, use the clipboard to import replies.
+To match a reply to a local session, macOS Automation reads the terminal device (TTY) of the selected tab or split pane, and the app checks its foreground process group. It keeps each session's latest completed reply in a private temporary directory and clears it when the session ends. Hook input is limited to 4 MiB, and the reply cache is limited to 16 MiB. For SSH or tmux sessions, use the clipboard to import replies.
 
 ## Dock and pin the panel
 
@@ -84,3 +84,7 @@ Verify both Terminal and iTerm2 with a running assistant. Check live previews, p
 - Clipboard preservation supports up to 64 MiB per paste operation. For larger clipboards, use **Copy Translation** and paste manually.
 - Use backticks around paths, variable names, and commands you want to keep intact. If Apple Translation changes a code placeholder, the app translates the surrounding text in segments.
 - Moving or replacing the app may require you to grant Accessibility again. If permissions appear enabled and pasting still fails, quit InputTranslator, remove the old Accessibility entry, add the current copy from Applications, and reopen it. For a local build, select the copy you actually run.
+
+## Contribute
+
+See the [contribution guide](CONTRIBUTING.md) for bug reports and pull requests, or the [security policy](SECURITY.md) for private vulnerability reporting.
