@@ -1,44 +1,57 @@
 # InputTranslator
 
-InputTranslator 是 macOS 15 或更新版本上的菜单栏工具。它用 Apple Translation 在设备上翻译选定的语言对，再把译文粘贴回 Terminal 或 iTerm2 中的终端助手。接入 Claude Code、Codex CLI 或 Gemini CLI 后，也可以直接读取当前会话最新完成的回复并反向翻译。翻译浮窗在 macOS 26 及以上使用原生 Liquid Glass 控件，macOS 15 使用标准按钮。
+[简体中文](README.zh-CN.md)
 
-## 安装与使用
+InputTranslator is a menu bar app for writing prompts and reading AI assistant replies in your preferred language. It uses Apple Translation to translate on your Mac. Paste translated prompts into Terminal or iTerm2, then read replies from Claude Code, Codex CLI, or Gemini CLI in the reverse language direction.
 
-1. 打开 `dist/InputTranslator.app`，从菜单栏选择「写提示词」或进入设置。本地构建采用临时签名，可在这台 Mac 上直接运行。
-2. 在系统设置的「隐私与安全性 → 辅助功能」中为这一份 `InputTranslator.app` 授权。部分 macOS 版本将此列表显示为「设备控制与数据访问（Device Control and Data Access）」。只使用翻译和复制时可以跳过授权。
-3. 将焦点放在 Terminal 或 iTerm2 的 Claude Code 输入区，按 `⌘⌥Space` 直接打开提示词输入框。快捷键冲突时可在设置中录制新组合。
-4. 在「设置 → 语言」中可分别选择界面语言、原文语言和译文语言。界面默认跟随 macOS 首选语言，手动选过的界面语言会在重开后保留。写提示词的默认方向是 macOS 首选语言 → 英语，读回复使用反向语言对。系统语言为英语时会直接使用原文。可翻译的语言由 macOS 提供，首次使用某个语言对时，系统可能要求下载对应资源。输入停顿约半秒后，输入区下方会显示译文预览，使用输入法时会等候选文字上屏再翻译。
-5. 按一次 `⌘↵` 或点「粘贴到终端」即可粘贴单行译文。翻译尚在进行时，按 `⌘↵` 会等待当前译文。多行粘贴可再按一次 `⌘↵` 确认。也可点「复制译文」，用 `Esc` 返回或关闭窗口，用 `⌘A` 全选原文。
+Requires **macOS 15 or later**. One universal build supports Apple silicon and Intel Macs. The floating panel uses native Liquid Glass controls on macOS 26 and later.
 
-「设置 → 终端 → 粘贴后自动按 Enter」默认关闭。开启后，单行内容只需点一次「粘贴并提交」或按一次 `⌘↵`，即可粘贴并按 Enter。多行译文要求确认粘贴，提交时请手动按 Enter。未置顶时，粘贴完成会收起浮窗，顶部入口会短暂显示「已粘贴」。点右上角图钉或菜单栏的「置顶浮窗」，可让浮窗在切换应用和粘贴完成后继续显示。重启会恢复置顶浮窗的位置和大小，焦点仍留在原应用。原显示器断开时，浮窗会移到可用的屏幕。权限或焦点检查失败时，原文和已生成的译文会留在窗口中。
+## Install and get started
 
-## 顶部停靠
+1. Download the universal macOS ZIP, unzip it, and move `InputTranslator.app` to **Applications**. [GitHub Releases](https://github.com/akz142857/InputTranslator/releases/latest)
+2. Open the app from Applications. Use its menu bar icon to open **Write Prompt** or **Settings**. The [release page](https://github.com/akz142857/InputTranslator/releases/latest) lists the signing status and any first-launch steps for the current download.
+3. Open **Settings → Language** to choose the interface language and translation direction. The interface follows your macOS language by default and remembers a manual selection. Prompt translation defaults to your preferred system language → English. **Read Reply** reverses that pair. macOS may prompt you to install the translation languages on first use.
 
-顶部停靠默认开启。屏幕顶部的「翻译」入口有刘海时对齐摄像头区域，无刘海时对齐屏幕中央。点击胶囊会把它展开成翻译窗。点窗口右上角的上箭头可缩回胶囊。按住胶囊可拖到屏幕其他位置，重开会保留落点。右键点胶囊并选择「恢复默认」可移回屏幕顶部。可在「设置 → 通用」或菜单栏关闭「顶部停靠」。
+## macOS permissions
 
-拖动面板顶部的把手可将它移出，拖回「翻译」入口附近可重新停靠。面板右侧也有移出和重新停靠按钮。重新停靠会对齐胶囊当前位置，优先放在下方，下方放不下时放在上方。图钉独立控制置顶。App 会记住停靠状态，以及移出后的位置和大小。开启置顶时，重开 App 会直接恢复浮窗。
+| Action | Setup |
+| --- | --- |
+| Paste into Terminal or iTerm2 | Enable InputTranslator in **System Settings → Privacy & Security → Accessibility**. This may appear as **Device Control and Data Access**. If the app is missing from the list, add the copy in **Applications**. Translation and copying work without this permission. |
+| Read replies from the current terminal session | Connect your assistant in **Settings → Assistants**. On the first read, allow InputTranslator to control Terminal or iTerm2 in the macOS prompt. Check this under **System Settings → Privacy & Security → Automation**. |
 
-## 接入终端助手
+## Write a prompt
 
-打开菜单栏的「终端助手接入…」或设置中的「助手接入」标签。选择要用的助手并点击「连接」。应用会检测配置状态。应用移动或回调不完整时，点击「修复」；点击「断开」可移除 InputTranslator 添加的回调。
+With your terminal input focused, press **⌘⌥Space** to open the prompt panel. After you pause typing, the translated preview appears below the editor. If you use an input method, translation starts after you commit the composed text.
 
-| 助手 | 回复完成事件 | 用户配置 |
+Press **⌘↵** or click **Paste to Terminal** to paste a single-line translation. If translation is running, the shortcut waits for the result. For multiple lines, press **⌘↵** again to confirm the paste. You can also copy the translation and paste it yourself.
+
+**Automatically press Enter after pasting** is off by default. In **Settings → Terminal**, you can enable it for single-line prompts. Submit multiline prompts manually. If the app loses the terminal focus or permission, your draft and translation stay in the panel.
+
+## Read an assistant reply
+
+In **Settings → Assistants**, click **Connect** for your assistant. Use **Repair** if you move the app or the connection is incomplete. **Disconnect** removes the hooks added by InputTranslator.
+
+| Assistant | Reply event | Default configuration |
 | --- | --- | --- |
 | Claude Code | `Stop` | `~/.claude/settings.json` |
 | Codex CLI | `Stop` | `~/.codex/hooks.json` |
 | Gemini CLI | `AfterAgent` | `~/.gemini/settings.json` |
 
-Codex CLI 的 hook 新增或修复后，在 Codex 里输入 `/hooks`，确认信任 InputTranslator 的回调。其他已有配置会保留。使用自定义配置目录时，从带相应环境变量的终端启动 App。
+After connecting or repairing Codex CLI, enter `/hooks` in Codex and trust the InputTranslator hooks. If your assistant uses a custom configuration directory, start InputTranslator from a terminal with the corresponding environment variables.
 
-在 Terminal 或 iTerm2 中打开本机助手会话，从浮窗切到「读回复」，或在终端按 `⌘⌥⇧Space`。首次读取时，允许 macOS 对该终端的「自动化」访问。「读回复」浮窗可见时，助手每完成一轮就会自动读取并翻译当前会话的新回复。置顶后可以边操作终端边查看更新。「从剪贴板读取」和手动输入的内容由你控制。App 会反向使用当前语言对。例如写提示词选日语 → 英语时，读回复就是英语 → 日语。
+In a connected session, press **⌘⌥⇧Space** or select **Read Reply**. While the panel is visible, new completed replies are read and translated as they arrive. Switch between **Translation** and **Original** to read either version. **⌘R** reads the latest reply, **⌘↵** copies the translation, and **Esc** returns to the previous app. **Read Clipboard** or **⌘⇧V** translates a reply you copy manually.
 
-切换「写提示词」和「读回复」时，窗口保持原来的位置和大小。阅读区顶部会显示来源和当前显示的语言，可就地切换「译文」和「原文」。按 `⌘R` 读取最新回复，按 `⌘↵` 复制译文，或按 `Esc` 返回原应用。读取失败会保留已显示的回复。
+The app matches replies to the terminal's foreground process group. It keeps each session's latest completed reply in a private temporary directory and clears it when the session ends. Hook input is limited to 4 MiB, and the reply cache is limited to 16 MiB. For SSH or tmux sessions, use the clipboard to import replies.
 
-回复按终端前台进程组匹配。每个会话仅缓存最新完成的一条回复，保存在当前用户的私有临时目录，会话结束时清除。Hook 事件输入上限为 4 MiB，回复缓存上限为 16 MiB。通过 SSH 或 tmux 运行的助手需要额外集成。手动导入仍可使用菜单栏「翻译剪贴板」或浮窗内 `⌘⇧V`。
+## Dock and pin the panel
 
-## 构建
+Top Dock is enabled by default. Click the Translate capsule to expand the panel. The capsule aligns with the camera notch on supported displays and with the center of the screen on other displays. Drag it to move it, or use **Restore Default** in its context menu.
 
-用 Xcode 打开 `InputTranslator/InputTranslator.xcodeproj`，选择 InputTranslator scheme。本地构建可以使用临时签名。
+Drag the panel's top handle to detach it. Drag it back near the capsule or use the dock button to reattach it. The window opens below the capsule when space allows and above it when space is limited. Pin the panel to keep it visible when you switch apps. InputTranslator remembers the window's position and size.
+
+## Build from source
+
+Open `InputTranslator/InputTranslator.xcodeproj` in Xcode and select the InputTranslator scheme. To build a local universal app with ad hoc signing, run the following commands.
 
 ```sh
 xcodebuild -project InputTranslator/InputTranslator.xcodeproj \
@@ -51,9 +64,9 @@ mkdir -p dist
 ditto DerivedData/Build/Products/Release/InputTranslator.app dist/InputTranslator.app
 ```
 
-项目关闭 App Sandbox，以便在用户授权后核对其他进程的可访问性焦点和发送粘贴按键。自动粘贴需要辅助功能权限。按终端会话读取回复需要自动化权限。设置保存在 UserDefaults，翻译草稿保留在内存中。
+InputTranslator uses macOS Accessibility to check the target window and send paste keystrokes. It uses Automation to identify the active terminal session. App Sandbox is disabled for these integrations. Settings are stored in UserDefaults, and translation drafts are kept in memory.
 
-## 测试
+## Test
 
 ```sh
 xcodebuild -project InputTranslator/InputTranslator.xcodeproj \
@@ -62,19 +75,12 @@ xcodebuild -project InputTranslator/InputTranslator.xcodeproj \
   CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO test
 ```
 
-在 macOS 15 和更新版本上分别检查 Terminal 与 iTerm2：
+Verify both Terminal and iTerm2 with a running assistant. Check live previews, preservation of inline code and fenced blocks, and single-line and multiline paste. Test default paste behavior and opt-in submission. Check how the app handles changes to the focused tab, split pane, app, and clipboard. Once the translation languages are installed, test offline translation as well.
 
-- 在 Claude Code 等待输入时，用中文输入法输入「检查 `user_id` 在哪里使用」。按一次 `⌘↵`，应在原输入区看到英文，原会话应仍在等待手动提交。
-- 在自动预览里检查代码块和行内代码，预览时原终端输入应保持原样。关闭辅助功能权限后再次测试，确认译文仍可复制。
-- 测试另一个标签页或分屏、终端查找框、翻译期间切换应用、取消翻译，以及剪贴板在粘贴期间被其他应用修改的情况。确认应用只向原输入区域粘贴，且保留新剪贴板内容。
-- 测试多行输入及单行自动提交。开启自动提交时，只按一次 `⌘↵` 就应粘贴并提交单行译文。多行译文应完整显示在 Claude Code 输入区，等待手动提交。
-- 首次下载语言资源后断网测试；同时检查全屏、外接显示器、快捷键冲突和开机启动。
+## Troubleshooting and limits
 
-## 已知限制
-
-- 辅助功能能核对终端窗口和输入焦点，无法识别终端里当前运行的程序或确认按键已被 Claude Code 接收。启用自动按 Enter 前，请用实际会话验证粘贴交接。
-- 多行粘贴的行为受终端和会话配置影响。若终端进入自己的粘贴确认模式，请检查原终端。译文可通过预览复制后手动粘贴。
-- 开启保留剪贴板时，自动粘贴最多备份 64 MiB 的剪贴板数据。超出时，请用「复制译文」手动粘贴。
-- 当前精确保留 Markdown 围栏代码块和反引号行内代码。请用行内代码标记需要保持原样的路径、变量名或命令。系统翻译若改动占位符，应用会改为分段翻译代码周围的正文，句子衔接可能有所变化。
-- 本地包未进行 Developer ID 签名或公证。重新签名、重构建或移动应用后，macOS 可能要求重新授予辅助功能权限。
-- 如果权限列表开关已打开，应用仍提示缺少辅助功能权限，请从菜单栏退出应用，在权限列表移除这一条 `InputTranslator.app`，用「＋」重新添加 `dist/InputTranslator.app` 并打开开关，再启动应用。临时签名随构建变化，旧授权可能仍显示为打开。
+- macOS Accessibility exposes the focused terminal window and input element. It cannot confirm that the assistant received the paste keystroke. Verify this in your own terminal session before enabling automatic submission.
+- A terminal can show its own confirmation for multiline paste. Inspect the terminal if the text does not appear. You can always copy the translation and paste it manually.
+- Clipboard preservation supports up to 64 MiB per paste operation. For larger clipboards, use **Copy Translation** and paste manually.
+- Use backticks around paths, variable names, and commands you want to keep intact. If Apple Translation changes a code placeholder, the app translates the surrounding text in segments.
+- Moving or replacing the app may require you to grant Accessibility again. If permissions appear enabled and pasting still fails, quit InputTranslator, remove the old Accessibility entry, add the current copy from Applications, and reopen it. For a local build, select the copy you actually run.

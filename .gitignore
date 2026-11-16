@@ -4,3 +4,4 @@ DerivedData/
 dist/
 /dist.zip
 *.profraw
+/.env
