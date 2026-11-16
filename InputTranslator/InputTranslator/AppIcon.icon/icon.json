@@ -14,6 +14,12 @@
       "layers": [
         { "name": "Reply", "image-name": "Reply.png", "glass": false }
       ]
+    },
+    {
+      "name": "Bookmark",
+      "layers": [
+        { "name": "Bookmark", "image-name": "Bookmark.png", "glass": false }
+      ]
     }
   ],
   "supported-platforms": {

@@ -4,6 +4,10 @@ import SwiftUI
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+    private final class StatusBookmarkView: NSImageView {
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
+    }
+
     private let controller = InputController()
     private lazy var hotkeys = HotkeyManager { [weak self] in self?.controller.toggleComposer() }
     private lazy var replyHotkey = HotkeyManager(signature: 0x49545252) { [weak self] in
@@ -28,8 +32,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         let statusIcon = NSImage(resource: .statusItemIcon)
         statusIcon.accessibilityDescription = "InputTranslator"
-        item.button?.image = statusIcon
-        item.button?.toolTip = "InputTranslator"
+        if let button = item.button {
+            button.image = statusIcon
+            button.toolTip = "InputTranslator"
+            let image = NSImage(resource: .statusItemBookmark)
+            let bookmark = StatusBookmarkView(image: image)
+            bookmark.imageScaling = .scaleNone
+            bookmark.setAccessibilityElement(false)
+            bookmark.translatesAutoresizingMaskIntoConstraints = false
+            button.addSubview(bookmark)
+            NSLayoutConstraint.activate([
+                bookmark.centerXAnchor.constraint(equalTo: button.centerXAnchor),
+                bookmark.centerYAnchor.constraint(equalTo: button.centerYAnchor),
+                bookmark.widthAnchor.constraint(equalToConstant: image.size.width),
+                bookmark.heightAnchor.constraint(equalToConstant: image.size.height),
+            ])
+        }
         let menu = NSMenu()
         menu.delegate = self
         item.menu = menu
