@@ -84,3 +84,7 @@ xcodebuild -project InputTranslator/InputTranslator.xcodeproj \
 ## 参与贡献
 
 提交问题或代码改动请参考[贡献指南](CONTRIBUTING.md)。发现安全问题时，请参考[安全报告说明](SECURITY.md)。
+
+## 许可证
+
+InputTranslator 采用 [MIT 许可证](LICENSE)。

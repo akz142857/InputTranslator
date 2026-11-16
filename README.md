@@ -88,3 +88,7 @@ Verify both Terminal and iTerm2 with a running assistant. Check live previews, p
 ## Contribute
 
 See the [contribution guide](CONTRIBUTING.md) for bug reports and pull requests, or the [security policy](SECURITY.md) for private vulnerability reporting.
+
+## License
+
+InputTranslator is licensed under the [MIT License](LICENSE).
