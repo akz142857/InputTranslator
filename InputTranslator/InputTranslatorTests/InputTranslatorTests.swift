@@ -1,0 +1,782 @@
+import AppKit
+import Translation
+import XCTest
+@testable import InputTranslator
+
+final class InputTranslatorTests: XCTestCase {
+    @MainActor func testProtectedCodeRoundTrip() throws {
+        let source = """
+        检查 `getUserInfo()` 和 ``含有 ` 的代码``：
+
+        ```sql
+        SELECT user_id FROM users;
+        ```
+
+        ~~~json
+        {"key":"保留"}
+        ~~~
+        """
+        let prompt = ProtectedPrompt(source)
+        XCTAssertFalse(prompt.source.contains("SELECT"))
+        XCTAssertFalse(prompt.source.contains("getUserInfo"))
+        XCTAssertFalse(prompt.source.contains("含有"))
+        XCTAssertFalse(prompt.source.contains("保留"))
+        let translated = prompt.source.replacingOccurrences(of: "检查", with: "Check")
+        XCTAssertEqual(try prompt.restore(in: translated), source.replacingOccurrences(of: "检查", with: "Check"))
+    }
+
+    @MainActor func testFencedBlockWithCRLFAndUnclosedFence() throws {
+        let source = "检查\r\n````md\r\n```\r\n内容"
+        let prompt = ProtectedPrompt(source)
+        XCTAssertFalse(prompt.source.contains("内容"))
+        XCTAssertEqual(try prompt.restore(in: prompt.source), source)
+    }
+
+    @MainActor func testMissingDuplicatedAndReorderedCodeFails() throws {
+        let prompt = ProtectedPrompt("`alpha` `beta`")
+        let tokens = prompt.source.split(separator: " ").map(String.init)
+        XCTAssertEqual(tokens.count, 2)
+        guard tokens.count == 2 else { return }
+        XCTAssertThrowsError(try prompt.restore(in: "Inspect \(tokens[0])"))
+        XCTAssertThrowsError(try prompt.restore(in: "\(prompt.source) \(tokens[1])"))
+        XCTAssertThrowsError(try prompt.restore(in: tokens.reversed().joined(separator: " ")))
+        XCTAssertThrowsError(try prompt.restore(in: prompt.source.lowercased()))
+    }
+
+    @MainActor func testFenceMustStayOnOwnLine() throws {
+        let prompt = ProtectedPrompt("检查\n```sh\nprintf hello\n```")
+        XCTAssertThrowsError(try prompt.restore(in: prompt.source.replacingOccurrences(of: "\n", with: " ")))
+    }
+
+    @MainActor func testReplyMarkdownPreservesAssistantStructureAndLiteralCode() {
+        let source = """
+        # Release
+
+        - **Important:** Review `origin/main` and [the guide](https://example.com/guide).
+          1. Check the logs.
+
+        > Keep this note.
+
+        | Check | Result |
+        | --- | --- |
+        | Build | Ready |
+
+        ```sh
+        npm test
+        ```
+        """
+        let document = ReplyMarkdown(source)
+        let display = ReplyMarkdown(source, retainSourcePositions: false)
+        XCTAssertEqual(display.blocks.map(\.path), document.blocks.map(\.path))
+        XCTAssertEqual(display.blocks.map { String($0.text.characters) }, document.blocks.map { String($0.text.characters) })
+        let ranges = document.translationRanges(in: TranslationPair.chineseToEnglish.reverse)
+        let replacements = Dictionary(uniqueKeysWithValues: ranges.indices.map { ($0, "译文") })
+        let translated = document.replacingProse(at: ranges, with: replacements)
+        let result = ReplyMarkdown(translated)
+        XCTAssertTrue(document.hasFormatting)
+        XCTAssertFalse(ranges.isEmpty)
+        XCTAssertEqual(result.blocks.map(\.path), document.blocks.map(\.path))
+        XCTAssertTrue(translated.contains("**译文**"))
+        XCTAssertTrue(translated.contains("`origin/main`"))
+        XCTAssertTrue(translated.contains("(https://example.com/guide)"))
+        XCTAssertTrue(translated.contains("```sh\nnpm test\n```"))
+    }
+
+    @MainActor func testEnglishAndCodeOnlyDoNotRequireTranslation() {
+        XCTAssertFalse(ProtectedPrompt("Review `中文字段`").requiresTranslation(in: .chineseToEnglish))
+        XCTAssertTrue(ProtectedPrompt("检查 `user_id`").requiresTranslation(in: .chineseToEnglish))
+    }
+
+    @MainActor func testPasteConfirmationAndControlCharacters() {
+        XCTAssertFalse(PasteService.requiresConfirmation(text: "Review"))
+        XCTAssertTrue(PasteService.requiresConfirmation(text: "Review\nx"))
+        XCTAssertTrue(PasteService.allowsTerminalPaste("Review 👩‍💻\n\tsecond line"))
+        XCTAssertFalse(PasteService.allowsTerminalPaste("Review\u{1B}[201~"))
+        XCTAssertFalse(PasteService.allowsTerminalPaste("Review\r"))
+        XCTAssertFalse(PasteService.allowsTerminalPaste("Review\u{2028}"))
+    }
+
+    @MainActor func testClipboardSnapshotLimitAndDeclaredOwnership() throws {
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        let owned = board.declareTypes([.string], owner: nil)
+        XCTAssertTrue(board.setString("existing clipboard", forType: .string))
+        XCTAssertEqual(board.changeCount, owned)
+        XCTAssertThrowsError(try PasteService.snapshot(board, byteLimit: 4))
+        XCTAssertEqual(board.changeCount, owned)
+        XCTAssertEqual(try PasteService.snapshot(board).first?.string(forType: .string), "existing clipboard")
+    }
+
+    @MainActor func testSingleLineAutomaticSubmissionIsOptIn() throws {
+        let settings = try isolatedSettings()
+        let controller = InputController(settings: settings)
+        controller.text = "Review the patch."
+        XCTAssertFalse(controller.willSubmitPrompt)
+        settings.autoSubmit = true
+        XCTAssertTrue(controller.willSubmitPrompt)
+        XCTAssertFalse(PasteService.requiresConfirmation(text: controller.text))
+        controller.text += "\nThen run the tests."
+        XCTAssertFalse(controller.willSubmitPrompt)
+        XCTAssertTrue(PasteService.requiresConfirmation(text: controller.text))
+    }
+
+    @MainActor func testPanelPreviewPreservesSource() async throws {
+        let existingWindows = Set(NSApp.windows)
+        let controller = InputController(settings: try isolatedSettings())
+        controller.showComposer()
+        defer { controller.dismissPanel() }
+        let panel = try newFloatingPanel(excluding: existingWindows)
+        for _ in 0..<20 where !(panel.firstResponder is PromptTextView) {
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        XCTAssertTrue(panel.firstResponder is PromptTextView)
+        controller.updateComposition(true)
+        controller.text = "Review"
+        try await Task.sleep(for: .milliseconds(550))
+        XCTAssertTrue(controller.result.isEmpty)
+        controller.text = "Review `user_id`."
+        controller.updateComposition(false)
+        await waitForResult(controller)
+        XCTAssertEqual(controller.result, "Review `user_id`.")
+        XCTAssertEqual(controller.text, "Review `user_id`.")
+        XCTAssertTrue(panel.isVisible)
+        controller.text = "Review another field."
+        XCTAssertTrue(controller.result.isEmpty)
+    }
+
+    @MainActor func testInstalledTranslationThroughPanel() async throws {
+        let status = await LanguageAvailability().status(from: TranslationPair.chineseToEnglish.source.localeLanguage, to: TranslationPair.chineseToEnglish.target.localeLanguage)
+        try XCTSkipUnless(status == .installed, "Chinese and English system translation models are required")
+
+        let controller = InputController(settings: try isolatedSettings())
+        controller.showComposer()
+        defer { controller.dismissPanel() }
+        controller.text = "你好，请列出文件。"
+        await waitForResult(controller)
+        let firstResult = controller.result
+        XCTAssertFalse(firstResult.isEmpty, controller.message ?? "No result from Apple Translation")
+        XCTAssertFalse(firstResult.unicodeScalars.contains { $0.properties.isIdeographic })
+        XCTAssertEqual(controller.text, "你好，请列出文件。")
+
+        controller.text = "请检查数据库结构。"
+        XCTAssertTrue(controller.result.isEmpty)
+        await waitForResult(controller)
+        XCTAssertFalse(controller.result.isEmpty, controller.message ?? "No updated result from Apple Translation")
+        XCTAssertNotEqual(controller.result, firstResult)
+        XCTAssertEqual(controller.text, "请检查数据库结构。")
+    }
+
+    @MainActor func testCommandReturnRequestsPasteAfterTranslation() async throws {
+        let status = await LanguageAvailability().status(from: TranslationPair.chineseToEnglish.source.localeLanguage, to: TranslationPair.chineseToEnglish.target.localeLanguage)
+        try XCTSkipUnless(status == .installed, "Chinese and English system translation models are required")
+
+        let existingWindows = Set(NSApp.windows)
+        let controller = InputController(settings: try isolatedSettings())
+        controller.showComposer()
+        defer { controller.dismissPanel() }
+        let panel = try newFloatingPanel(excluding: existingWindows)
+        controller.text = "你好，请列出文件。"
+        let event = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: .command, timestamp: 0,
+            windowNumber: panel.windowNumber, context: nil, characters: "\r",
+            charactersIgnoringModifiers: "\r", isARepeat: false, keyCode: 36
+        ))
+        panel.sendEvent(event)
+
+        await waitForResult(controller)
+        XCTAssertFalse(controller.result.isEmpty, controller.message ?? "No translation after Command-Return")
+        XCTAssertTrue(controller.showsError)
+        XCTAssertTrue(controller.offersAccessibilitySettings)
+        XCTAssertTrue(panel.isVisible)
+        XCTAssertEqual(controller.text, "你好，请列出文件。")
+    }
+
+    @MainActor func testVisibleReplyAutomaticallyTranslatesTwoCompletedTurns() async throws {
+        let settings = try isolatedSettings()
+        let reverse = settings.translationPair.reverse
+        let status = await LanguageAvailability().status(from: reverse.source.localeLanguage,
+                                                         to: reverse.target.localeLanguage)
+        try XCTSkipUnless(status == .installed, "English and Chinese system translation models are required")
+
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = TerminalReplyStore(directory: directory.appendingPathComponent("replies"))
+        let job = TerminalJob(device: 1, group: 42, startedSeconds: 67, startedMicroseconds: 89)
+        let config = directory.appendingPathComponent("claude.json")
+        try TerminalHookInstaller(.claude, configuration: config).update(install: true)
+        let controller = InputController(
+            settings: settings, hookInstaller: { TerminalHookInstaller($0, configuration: config) },
+            readTerminalReply: { _ in
+                guard let reply = try store.latest(for: job) else { throw TerminalReplyReader.Failure.replyUnavailable }
+                return reply
+            }
+        )
+        controller.showComposer()
+        controller.showReplyMode()
+        defer { controller.dismissPanel() }
+        let changes = try store.observeChanges { controller.refreshLiveReply() }
+        defer { changes.cancel() }
+
+        var previousResult = ""
+        let sources = [
+            "# Quick check\n\n- **Open the window.**\n- Run `npm test`.\n\n```sh\nnpm test\n```",
+            "# Schedule\n\n**The meeting starts tomorrow.**"
+        ]
+        for source in sources {
+            try store.receive(TerminalHookInput(event: .finishedReply, session: "session", message: source),
+                              assistant: .claude, from: job)
+            for _ in 0..<60 where controller.text != source || controller.result.isEmpty {
+                try await Task.sleep(for: .milliseconds(50))
+            }
+            XCTAssertEqual(controller.text, source)
+            XCTAssertTrue(controller.result.unicodeScalars.contains { $0.properties.isIdeographic })
+            XCTAssertEqual(ReplyMarkdown(controller.result).blocks.map(\.path),
+                           ReplyMarkdown(source).blocks.map(\.path))
+            XCTAssertNotEqual(controller.result, previousResult)
+            previousResult = controller.result
+        }
+    }
+
+    @MainActor func testInFlightLiveReplyDoesNotReplaceManualClipboardReply() async throws {
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        XCTAssertTrue(board.setString("A reply chosen from the clipboard.", forType: .string))
+        let started = expectation(description: "Live reply lookup started")
+        let completed = expectation(description: "Live reply lookup returned")
+        var pending: CheckedContinuation<Void, Never>?
+        let controller = InputController(pasteboard: board, settings: try isolatedSettings(), readTerminalReply: { _ in
+            await withCheckedContinuation { continuation in
+                pending = continuation
+                started.fulfill()
+            }
+            completed.fulfill()
+            return TerminalReply(assistant: .claude, text: "Stale terminal reply")
+        })
+        controller.showComposer()
+        controller.showReplyMode()
+        defer { controller.dismissPanel() }
+        controller.refreshLiveReply()
+        await fulfillment(of: [started], timeout: 2)
+        controller.translateClipboard()
+        pending?.resume()
+        await fulfillment(of: [completed], timeout: 2)
+        XCTAssertEqual(controller.replyOrigin, .clipboard)
+        XCTAssertEqual(controller.text, "A reply chosen from the clipboard.")
+    }
+
+    @MainActor func testReverseTranslationFromClipboardAndDraftRestoration() async throws {
+        let pair = TranslationPair.chineseToEnglish.reverse
+        let status = await LanguageAvailability().status(from: pair.source.localeLanguage, to: pair.target.localeLanguage)
+        try XCTSkipUnless(status == .installed, "Chinese and English system translation models are required")
+
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        let existingWindows = Set(NSApp.windows)
+        let controller = InputController(pasteboard: board, settings: try isolatedSettings())
+        controller.showComposer()
+        defer { controller.dismissPanel() }
+        let panel = try newFloatingPanel(excluding: existingWindows)
+        let draft = "请列出文件。"
+        controller.text = draft
+
+        let reply = """
+        The database stores customer orders.
+
+        ```sql
+        SELECT user_id FROM orders;
+        ```
+
+        The query lists the users who placed orders.
+        """
+        XCTAssertTrue(board.setString(reply, forType: .string))
+        let importShortcut = try XCTUnwrap(NSEvent.keyEvent(
+            with: .keyDown, location: .zero, modifierFlags: [.command, .shift], timestamp: 0,
+            windowNumber: panel.windowNumber, context: nil, characters: "V",
+            charactersIgnoringModifiers: "V", isARepeat: false, keyCode: 9
+        ))
+        panel.sendEvent(importShortcut)
+
+        XCTAssertEqual(controller.mode, .readReply)
+        XCTAssertEqual(controller.text, reply)
+        await waitForResult(controller)
+        let translated = controller.result
+        XCTAssertTrue(translated.unicodeScalars.contains { $0.properties.isIdeographic },
+                      controller.message ?? "No Chinese preview")
+        XCTAssertTrue(translated.contains("```sql\nSELECT user_id FROM orders;\n```"))
+        XCTAssertEqual(board.string(forType: .string), reply)
+
+        controller.requestPrimaryAction()
+        XCTAssertEqual(board.string(forType: .string), translated)
+        XCTAssertTrue(panel.isVisible)
+
+        controller.showComposer()
+        XCTAssertEqual(controller.mode, .compose)
+        XCTAssertEqual(controller.text, draft)
+        XCTAssertTrue(controller.result.isEmpty)
+        await waitForResult(controller)
+        XCTAssertFalse(controller.result.isEmpty)
+        XCTAssertFalse(controller.result.unicodeScalars.contains { $0.properties.isIdeographic })
+
+        XCTAssertTrue(board.setString(reply, forType: .string))
+        controller.openReplyFromClipboard()
+        XCTAssertEqual(controller.text, reply)
+        XCTAssertEqual(controller.result, translated)
+        XCTAssertFalse(controller.showsSource)
+        controller.showReplySource(true)
+        XCTAssertTrue(controller.showsSource)
+    }
+
+    @MainActor func testReverseTranslationSkipsCodeOnlyInput() {
+        XCTAssertFalse(ProtectedPrompt("`user_id`").requiresTranslation(in: .chineseToEnglish.reverse))
+        XCTAssertFalse(ProtectedPrompt("检查 `user_id`").requiresTranslation(in: .chineseToEnglish.reverse))
+        XCTAssertTrue(ProtectedPrompt("Review `user_id`").requiresTranslation(in: .chineseToEnglish.reverse))
+    }
+
+    @MainActor func testLanguagePairFollowsModeAndClearsPreviousPreview() async throws {
+        let suite = "InputTranslatorTests.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        let controller = InputController(pasteboard: board, settings: AppSettings(defaults: defaults, preferredLanguage: "zh-Hans"))
+        controller.text = "Review `user_id`."
+        controller.requestPrimaryAction()
+        XCTAssertEqual(controller.result, controller.text)
+
+        controller.selectTargetLanguage(TranslationLanguage("ja"))
+        XCTAssertEqual(controller.languagePair.target.id, "ja")
+        XCTAssertTrue(controller.result.isEmpty)
+        XCTAssertEqual(controller.text, "Review `user_id`.")
+        XCTAssertTrue(board.setString("テストを実行してください。", forType: .string))
+        controller.translateClipboard()
+        XCTAssertEqual(controller.languagePair.source.id, "ja")
+        XCTAssertEqual(controller.languagePair.target, TranslationPair.chineseToEnglish.source)
+        controller.selectSourceLanguage(TranslationLanguage("fr"))
+        XCTAssertEqual(AppSettings(defaults: defaults).translationPair,
+                       TranslationPair(source: TranslationLanguage("fr"), target: TranslationLanguage("ja")))
+
+        controller.swapLanguages()
+        XCTAssertEqual(controller.languagePair.source.id, "fr")
+        XCTAssertEqual(controller.languagePair.target.id, "ja")
+        XCTAssertEqual(controller.text, "テストを実行してください。")
+    }
+
+    @MainActor func testReplyModePreservesComposerDraft() throws {
+        let controller = InputController(settings: try isolatedSettings())
+        controller.showComposer()
+        defer { controller.dismissPanel() }
+        controller.text = "请检查迁移脚本。"
+        controller.showReplyMode()
+        XCTAssertEqual(controller.mode, .readReply)
+        XCTAssertTrue(controller.text.isEmpty)
+        XCTAssertFalse(controller.showsSource)
+        controller.showComposer()
+        XCTAssertEqual(controller.mode, .compose)
+        XCTAssertEqual(controller.text, "请检查迁移脚本。")
+    }
+
+    @MainActor func testNonDefaultLanguagesUseUnicodeProseAndPreserveCode() {
+        let pair = TranslationPair(source: TranslationLanguage("ja"), target: TranslationLanguage("fr"))
+        let prompt = ProtectedPrompt("構成を確認してください `config.toml`。")
+        XCTAssertTrue(prompt.requiresTranslation(in: pair))
+        XCTAssertFalse(ProtectedPrompt("`構成` 123…").requiresTranslation(in: pair))
+        let translated = prompt.source.replacingOccurrences(of: "構成を確認してください", with: "Vérifiez la configuration")
+        XCTAssertEqual(try prompt.restore(in: translated), "Vérifiez la configuration `config.toml`。")
+    }
+
+    @MainActor func testEmptyClipboardOpensReplyInputAndKeepsComposerDraft() throws {
+        let board = NSPasteboard.withUniqueName()
+        defer { board.releaseGlobally() }
+        let controller = InputController(pasteboard: board, settings: try isolatedSettings())
+        controller.showComposer()
+        defer { controller.dismissPanel() }
+        controller.text = "检查迁移脚本。"
+
+        controller.openReplyFromClipboard()
+        XCTAssertEqual(controller.mode, .readReply)
+        XCTAssertTrue(controller.showsSource)
+        XCTAssertTrue(controller.showsError)
+        XCTAssertTrue(controller.text.isEmpty)
+
+        controller.toggleComposer()
+        XCTAssertEqual(controller.mode, .compose)
+        XCTAssertEqual(controller.text, "检查迁移脚本。")
+        XCTAssertTrue(controller.showsSource)
+    }
+
+    @MainActor private func isolatedSettings() throws -> AppSettings {
+        let suite = "InputTranslatorTests.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        addTeardownBlock { UserDefaults(suiteName: suite)?.removePersistentDomain(forName: suite) }
+        return AppSettings(defaults: defaults, preferredLanguage: "zh-Hans")
+    }
+
+    @MainActor private func waitForResult(_ controller: InputController) async {
+        for _ in 0..<100 {
+            if !controller.result.isEmpty || controller.showsError { return }
+            try? await Task.sleep(for: .milliseconds(100))
+        }
+    }
+
+    @MainActor private func newFloatingPanel(excluding existingWindows: Set<NSWindow>) throws -> FloatingPanel {
+        let windows = NSApp.windows.compactMap { $0 as? FloatingPanel }
+        return try XCTUnwrap(windows.first { $0.isVisible && !existingWindows.contains($0) })
+    }
+
+    @MainActor func testSettingsDefaultsAndPersistence() throws {
+        let suite = "InputTranslatorTests.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AppSettings(defaults: defaults, preferredLanguage: "fr-CA")
+        XCTAssertFalse(settings.autoSubmit)
+        XCTAssertEqual(settings.terminal, .lastActive)
+        XCTAssertTrue(settings.clearAfterPaste)
+        XCTAssertTrue(settings.preserveClipboard)
+        XCTAssertFalse(settings.panelPinned)
+        XCTAssertTrue(settings.topDockEnabled)
+        XCTAssertTrue(settings.prefersTopDock)
+        XCTAssertEqual(settings.hotkey, .standard)
+        XCTAssertEqual(settings.interfaceLanguage, .system)
+        XCTAssertEqual(settings.translationPair.source, TranslationLanguage("fr"))
+        XCTAssertEqual(settings.translationPair.target, TranslationPair.english)
+        XCTAssertNil(defaults.object(forKey: "translationLanguages"))
+        settings.autoSubmit = true
+        settings.terminal = .iTerm
+        settings.clearAfterPaste = false
+        settings.preserveClipboard = false
+        settings.panelPinned = true
+        settings.topDockEnabled = false
+        settings.panelDetached = true
+        settings.interfaceLanguage = .japanese
+        let hotkey = Hotkey(keyCode: 0, modifiers: 4096, keyLabel: "A")
+        settings.saveHotkey(hotkey)
+        let reloaded = AppSettings(defaults: defaults, preferredLanguage: "zh-HK")
+        XCTAssertTrue(reloaded.autoSubmit)
+        XCTAssertEqual(reloaded.terminal, .iTerm)
+        XCTAssertFalse(reloaded.clearAfterPaste)
+        XCTAssertFalse(reloaded.preserveClipboard)
+        XCTAssertTrue(reloaded.panelPinned)
+        XCTAssertFalse(reloaded.topDockEnabled)
+        XCTAssertTrue(reloaded.panelDetached)
+        XCTAssertFalse(reloaded.prefersTopDock)
+        XCTAssertEqual(reloaded.hotkey, hotkey)
+        XCTAssertEqual(reloaded.interfaceLanguage, .japanese)
+        XCTAssertEqual(reloaded.translationPair.source, TranslationLanguage("zh-Hant"))
+        XCTAssertEqual(reloaded.translationPair.target, TranslationPair.english)
+
+        reloaded.translationPair = TranslationPair(source: TranslationLanguage("ar"), target: TranslationLanguage("ko"))
+        let afterManualPair = AppSettings(defaults: defaults, preferredLanguage: "en-SG")
+        XCTAssertEqual(afterManualPair.translationPair, reloaded.translationPair)
+    }
+
+    @MainActor func testEnglishSystemLanguageUsesCurrentTextWithoutAServiceRequest() throws {
+        let suite = "InputTranslatorTests.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AppSettings(defaults: defaults, preferredLanguage: "en-GB")
+        let english = TranslationPair.english
+        XCTAssertEqual(settings.translationPair, TranslationPair(source: english, target: english))
+        let controller = InputController(settings: settings)
+        controller.text = "Review `user_id`."
+        controller.requestPrimaryAction()
+        XCTAssertEqual(controller.result, controller.text)
+        XCTAssertNil(controller.requestID)
+    }
+
+    @MainActor func testReopenPreservesTheEarlierRedockPreferenceAfterUpgrade() throws {
+        let suite = "InputTranslatorTests.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        XCTAssertFalse(AppSettings(defaults: defaults).dockedBesideLauncher)
+        defaults.set(false, forKey: "dockedBesideLauncher")
+        let restored = AppSettings(defaults: defaults)
+        XCTAssertTrue(restored.dockedBesideLauncher)
+        restored.dockedBesideLauncher = true
+        defaults.removeObject(forKey: "dockedBesideLauncher")
+        XCTAssertTrue(AppSettings(defaults: defaults).dockedBesideLauncher)
+    }
+
+    @MainActor func testDockMorphExpandsTheCapsuleAndCancelsBackToItsExactFrame() async throws {
+        let settings = try isolatedSettings()
+        let controller = InputController(settings: settings)
+        let panel = FloatingPanel(controller: controller)
+        let layout = try XCTUnwrap(NSScreen.main).topDockLayout
+        panel.applyTopDock(layout)
+        let restingFrame = panel.frame
+        let launcher = TopDockPanel(action: {})
+        launcher.show(at: layout, expanded: false)
+        defer {
+            launcher.cancelMorph()
+            launcher.orderOut(nil)
+            panel.orderOut(nil)
+        }
+
+        var frames = [NSRect]()
+        let opened = expectation(description: "Dock morph opened")
+        launcher.animate(layout: layout, panelFrame: restingFrame, opening: true) { _ in
+            frames.append(launcher.frame)
+        } completion: { opened.fulfill() }
+        await fulfillment(of: [opened], timeout: 1)
+        XCTAssertEqual(frames.first, layout.launcherFrame)
+        if !NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            XCTAssertEqual(frames.last, restingFrame)
+            XCTAssertTrue(frames.contains { $0.width > layout.launcherFrame.width && $0.width < restingFrame.width })
+            XCTAssertTrue(frames.contains { $0.height > layout.launcherFrame.height && $0.height < restingFrame.height })
+        }
+        XCTAssertEqual(panel.frame, restingFrame)
+
+        let closed = expectation(description: "Canceled morph did not complete")
+        closed.isInverted = true
+        launcher.animate(layout: layout, panelFrame: restingFrame, opening: false, onChange: { _ in }) {
+            closed.fulfill()
+        }
+        launcher.cancelMorph()
+        await fulfillment(of: [closed], timeout: 0.4)
+        XCTAssertNil(launcher.activeLayout)
+        XCTAssertEqual(launcher.frame, layout.launcherFrame)
+        XCTAssertEqual(launcher.alphaValue, 1, accuracy: 0.001)
+        XCTAssertFalse(launcher.ignoresMouseEvents)
+
+        let collapsed = expectation(description: "The same capsule remains visible at the end of the close animation")
+        launcher.animate(layout: layout, panelFrame: restingFrame, opening: false, onChange: { _ in }) {
+            XCTAssertTrue(launcher.isVisible)
+            XCTAssertEqual(launcher.frame, layout.launcherFrame)
+            XCTAssertEqual(launcher.alphaValue, 1, accuracy: 0.001)
+            collapsed.fulfill()
+        }
+        await fulfillment(of: [collapsed], timeout: 1)
+    }
+
+    @MainActor func testAdjacentDockMorphGrowsAndShrinksFromBothCapsuleEdges() async throws {
+        let screen = try XCTUnwrap(NSScreen.main)
+        let launcher = TopDockPanel(action: {})
+        let reduceMotion = NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+        defer {
+            launcher.cancelMorph()
+            launcher.orderOut(nil)
+        }
+
+        for opensAbove in [false, true] {
+            let visible = screen.visibleFrame
+            let placement = opensAbove ? PinnedPanelPlacement(
+                frame: NSRect(origin: NSPoint(x: visible.minX + 5, y: visible.minY + 5),
+                              size: TopDockLayout.launcherSize),
+                screenFrame: visible, displayNumber: screen.displayNumber
+            ) : nil
+            let layout = screen.topDockLayout(launcherPlacement: placement)
+            let capsule = layout.launcherFrame
+            let panel = layout.panelFrame(size: NSSize(width: 580, height: 350), besideLauncher: true)
+            launcher.show(at: layout, expanded: false)
+
+            for opening in [true, false] {
+                var frames = [NSRect]()
+                var opacity = [CGFloat]()
+                let finished = expectation(description: "The adjacent window completed its dock animation")
+                launcher.animate(layout: layout, panelFrame: panel, opening: opening, besideLauncher: true) { alpha in
+                    XCTAssertEqual(launcher.frame, capsule)
+                    XCTAssertEqual(launcher.alphaValue, 1)
+                    XCTAssertFalse(launcher.ignoresMouseEvents)
+                    if let surface = launcher.adjacentSurface {
+                        XCTAssertTrue(surface.ignoresMouseEvents)
+                        frames.append(surface.frame)
+                    }
+                    opacity.append(alpha)
+                } completion: { finished.fulfill() }
+                await fulfillment(of: [finished], timeout: 1)
+
+                XCTAssertTrue(launcher.isVisible)
+                XCTAssertFalse(launcher.adjacentSurface?.isVisible ?? false)
+                XCTAssertEqual(opacity.first, opening ? 0 : 1)
+                XCTAssertEqual(opacity.last, opening ? 1 : 0)
+                if reduceMotion {
+                    XCTAssertTrue(frames.isEmpty)
+                    continue
+                }
+                let collapsed = try XCTUnwrap(opening ? frames.first : frames.last)
+                XCTAssertEqual(opensAbove ? collapsed.minY : collapsed.maxY,
+                               opensAbove ? capsule.maxY : capsule.minY, accuracy: 1)
+                XCTAssertEqual(collapsed.height, 1, accuracy: 0.5)
+                XCTAssertEqual(collapsed.midX, capsule.midX, accuracy: 1)
+                XCTAssertEqual(opening ? frames.last : frames.first, panel)
+                XCTAssertTrue(frames.allSatisfy { opensAbove ? $0.minY >= capsule.maxY : $0.maxY <= capsule.minY })
+                XCTAssertTrue(frames.contains { $0.width > collapsed.width && $0.width < panel.width
+                                              && $0.height > collapsed.height && $0.height < panel.height })
+            }
+        }
+    }
+
+    @MainActor func testAdjacentDockMorphReversesFromTheCurrentFrame() async throws {
+        if NSWorkspace.shared.accessibilityDisplayShouldReduceMotion {
+            throw XCTSkip("This check samples the shape animation.")
+        }
+        let layout = try XCTUnwrap(NSScreen.main).topDockLayout
+        let panel = layout.panelFrame(size: NSSize(width: 580, height: 350), besideLauncher: true)
+        let launcher = TopDockPanel(action: {})
+        launcher.show(at: layout, expanded: false)
+        defer {
+            launcher.cancelMorph()
+            launcher.orderOut(nil)
+        }
+        let intermediate = expectation(description: "The surface reached an intermediate frame")
+        let canceled = expectation(description: "The original opening completion is canceled")
+        canceled.isInverted = true
+        var reachedIntermediateFrame = false
+        launcher.animate(layout: layout, panelFrame: panel, opening: true, besideLauncher: true) { _ in
+            if !reachedIntermediateFrame, let height = launcher.adjacentSurface?.frame.height, height > 30 {
+                reachedIntermediateFrame = true
+                intermediate.fulfill()
+            }
+        } completion: { canceled.fulfill() }
+        await fulfillment(of: [intermediate], timeout: 1)
+
+        let surface = try XCTUnwrap(launcher.adjacentSurface)
+        let previousFrame = surface.frame
+        XCTAssertLessThan(previousFrame.height, panel.height)
+        let reversed = expectation(description: "The surface collapsed after reversing")
+        launcher.animate(layout: layout, panelFrame: panel, opening: false, besideLauncher: true) { _ in
+            XCTAssertTrue(launcher.isVisible)
+            XCTAssertEqual(launcher.frame, layout.launcherFrame)
+        } completion: { reversed.fulfill() }
+        XCTAssertEqual(surface.frame, previousFrame)
+        XCTAssertTrue(surface.isVisible)
+        await fulfillment(of: [reversed, canceled], timeout: 0.5)
+        XCTAssertFalse(surface.isVisible)
+    }
+
+    @MainActor func testPinKeepsPanelVisibleAfterDismissAndRestoresWithoutFocus() throws {
+        let suite = "InputTranslatorTests.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let existingWindows = Set(NSApp.windows)
+        let settings = AppSettings(defaults: defaults)
+        settings.topDockEnabled = false
+        let controller = InputController(settings: settings)
+        controller.togglePanelPin()
+        defer { controller.dismissPanel() }
+
+        let panel = try newFloatingPanel(excluding: existingWindows)
+        XCTAssertFalse(panel.isKeyWindow)
+        XCTAssertFalse(panel.hidesOnDeactivate)
+        XCTAssertTrue(panel.collectionBehavior.contains(.canJoinAllSpaces))
+        XCTAssertEqual(panel.level, .floating)
+
+        let visible = try XCTUnwrap(panel.screen?.visibleFrame)
+        let newSize = NSSize(width: 528, height: 308)
+        panel.setContentSize(newSize)
+        XCTAssertEqual(AppSettings(defaults: defaults).pinnedPanelPlacement?.frame, panel.frame)
+        panel.setFrameOrigin(NSPoint(x: visible.maxX - panel.frame.width, y: visible.maxY - panel.frame.height))
+        let pinnedFrame = panel.frame
+        XCTAssertEqual(panel.contentRect(forFrameRect: pinnedFrame).size, newSize)
+        XCTAssertEqual(AppSettings(defaults: defaults).pinnedPanelPlacement?.frame, pinnedFrame)
+
+        controller.dismissPanel(keepPinned: true)
+        XCTAssertTrue(panel.isVisible)
+        panel.performClose(nil)
+        XCTAssertFalse(panel.isVisible)
+
+        let restarted = InputController(settings: AppSettings(defaults: defaults))
+        restarted.restorePinnedPanel()
+        defer { restarted.dismissPanel() }
+        let restored = try newFloatingPanel(excluding: existingWindows.union([panel]))
+        XCTAssertFalse(restored.isKeyWindow)
+        XCTAssertFalse(restored.hidesOnDeactivate)
+        XCTAssertEqual(restored.frame, pinnedFrame)
+        restarted.togglePanelPin()
+        XCTAssertTrue(restored.hidesOnDeactivate)
+        XCTAssertTrue(restored.collectionBehavior.contains(.moveToActiveSpace))
+        restored.setFrameOrigin(NSPoint(x: visible.minX + 32, y: visible.minY + 32))
+        XCTAssertEqual(AppSettings(defaults: defaults).pinnedPanelPlacement?.frame, pinnedFrame)
+    }
+
+    @MainActor func testDefaultTopDockPreservesExistingPinnedFloatingPlacement() throws {
+        let suite = "InputTranslatorTests.\(UUID())"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        let settings = AppSettings(defaults: defaults)
+        settings.panelPinned = true
+        let placement = PinnedPanelPlacement(
+            frame: NSRect(x: 50, y: 100, width: 540, height: 320),
+            screenFrame: NSRect(x: 0, y: 0, width: 1512, height: 950),
+            displayNumber: nil
+        )
+        settings.savePanelPlacement(placement, docked: false)
+
+        let restored = AppSettings(defaults: defaults)
+        XCTAssertTrue(restored.topDockEnabled)
+        XCTAssertTrue(restored.panelDetached)
+        XCTAssertEqual(restored.pinnedPanelPlacement, placement)
+    }
+
+    func testTopDockUsesCameraPositionAndFitsTheVisibleScreen() {
+        let screen = NSRect(x: -1000, y: 0, width: 1000, height: 800)
+        let visible = NSRect(x: -980, y: 45, width: 980, height: 719)
+        let notch = TopDockLayout(visibleFrame: visible, screenFrame: screen,
+                                  topLeft: NSRect(x: -1000, y: 764, width: 520, height: 36),
+                                  topRight: NSRect(x: -360, y: 764, width: 360, height: 36))
+        XCTAssertEqual(notch.launcherFrame.midX, -420)
+        XCTAssertLessThan(notch.launcherFrame.maxY, visible.maxY)
+        let fitted = notch.panelFrame(size: NSSize(width: 1200, height: 900))
+        XCTAssertTrue(visible.contains(fitted))
+        let regular = notch.panelFrame(size: NSSize(width: 580, height: 350))
+        XCTAssertEqual(regular.maxY, notch.launcherFrame.maxY)
+
+        let movedFrame = NSRect(origin: NSPoint(x: -215, y: 63), size: TopDockLayout.launcherSize)
+        let saved = PinnedPanelPlacement(frame: movedFrame, screenFrame: visible, displayNumber: 1)
+        let moved = TopDockLayout(visibleFrame: visible, screenFrame: screen, topLeft: nil, topRight: nil,
+                                  launcherPlacement: saved)
+        let movedPanel = moved.panelFrame(size: regular.size)
+        XCTAssertEqual(moved.launcherFrame, movedFrame)
+        XCTAssertTrue(visible.contains(movedPanel))
+        XCTAssertTrue(movedPanel.contains(moved.launcherFrame))
+        let below = notch.panelFrame(size: regular.size, besideLauncher: true)
+        XCTAssertEqual(below.maxY, notch.launcherFrame.minY - 5)
+        XCTAssertTrue(visible.contains(below))
+        let above = moved.panelFrame(size: regular.size, besideLauncher: true)
+        XCTAssertEqual(above.minY, moved.launcherFrame.maxY + 5)
+        XCTAssertEqual(above.size, regular.size)
+        XCTAssertTrue(visible.contains(above))
+        let flat = TopDockLayout(visibleFrame: visible, screenFrame: screen, topLeft: nil, topRight: nil)
+        XCTAssertEqual(flat.launcherFrame.midX, screen.midX)
+    }
+
+    @MainActor func testDockPasteFeedbackClearsOnOpenAndExpiresWithoutFocus() async throws {
+        let layout = try XCTUnwrap(NSScreen.main).topDockLayout
+        let launcher = TopDockPanel(action: {})
+        launcher.show(at: layout, expanded: false)
+        defer { launcher.orderOut(nil) }
+        let frame = launcher.frame
+
+        launcher.acknowledgePaste(submitted: false)
+        XCTAssertEqual(launcher.pasteFeedback, L10n.text("已粘贴"))
+        XCTAssertEqual(launcher.frame, frame)
+        XCTAssertFalse(launcher.isKeyWindow)
+        launcher.show(at: layout, expanded: true)
+        XCTAssertNil(launcher.pasteFeedback)
+
+        launcher.show(at: layout, expanded: false)
+        launcher.acknowledgePaste(submitted: true)
+        XCTAssertEqual(launcher.pasteFeedback, L10n.text("已提交"))
+        for _ in 0..<30 where launcher.pasteFeedback != nil {
+            try await Task.sleep(for: .milliseconds(60))
+        }
+        XCTAssertNil(launcher.pasteFeedback)
+        XCTAssertFalse(launcher.isKeyWindow)
+    }
+
+    func testPinnedPanelPlacementFitsAnotherDisplay() {
+        let placement = PinnedPanelPlacement(
+            frame: NSRect(x: -610, y: 448, width: 600, height: 400),
+            screenFrame: NSRect(x: -1440, y: 0, width: 1440, height: 860),
+            displayNumber: 2
+        )
+        let replacement = NSRect(x: 0, y: 32, width: 1024, height: 640)
+        XCTAssertEqual(placement.restoredFrame(in: replacement), NSRect(x: 414, y: 260, width: 600, height: 400))
+        let smaller = NSRect(x: 0, y: 32, width: 580, height: 420)
+        XCTAssertEqual(placement.restoredFrame(in: smaller), NSRect(x: 0, y: 40, width: 580, height: 400))
+    }
+}
+
+private extension TranslationPair {
+    static let chineseToEnglish = Self(source: TranslationLanguage("zh-Hans"), target: english)
+}

@@ -1,0 +1,71 @@
+{
+  "sourceLanguage": "en",
+  "strings": {
+    "NSAppleEventsUsageDescription": {
+      "extractionState": "manual",
+      "localizations": {
+        "ar": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "يقرأ InputTranslator معرّف الجهاز لعلامة تبويب الطرفية أو الجزء النشط لمطابقة الردود مع الجلسة الصحيحة."
+          }
+        },
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "InputTranslator liest die Gerätekennung des aktiven Terminal-Tabs oder -Bereichs, um Antworten der richtigen Sitzung zuzuordnen."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "InputTranslator reads the device identifier of the active terminal tab or split pane to match replies to the correct session."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "InputTranslator lee el identificador del dispositivo de la pestaña o panel activo del terminal para asociar las respuestas con su sesión."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "InputTranslator lit l’identifiant du périphérique de l’onglet ou du volet actif du terminal pour associer la réponse à la bonne session."
+          }
+        },
+        "ja": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "InputTranslator は現在のターミナルのタブまたは分割ペインのデバイス識別子を読み取り、該当するセッションの返信を特定します。"
+          }
+        },
+        "ko": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "InputTranslator는 현재 터미널 탭 또는 분할 창의 기기 식별자를 읽어 해당 세션의 답변을 찾습니다."
+          }
+        },
+        "pt-BR": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "O InputTranslator lê o identificador do dispositivo da aba ou painel ativo do terminal para associar as respostas à sessão correta."
+          }
+        },
+        "zh-Hans": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "InputTranslator 需要读取当前终端标签页或分屏的设备标识，以匹配该会话的回复。"
+          }
+        },
+        "zh-Hant": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "InputTranslator 需要讀取目前終端機標籤頁或分割窗格的裝置識別碼，才能配對該工作階段的回覆。"
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}
