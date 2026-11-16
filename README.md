@@ -12,6 +12,12 @@ Requires **macOS 15 or later**. One universal build supports Apple silicon and I
 2. Open the app from Applications. Use its menu bar icon to open **Write Prompt** or **Settings**. The [release page](https://github.com/akz142857/InputTranslator/releases/latest) lists the signing status and any first-launch steps for the current download.
 3. Open **Settings → Language** to choose the interface language and translation direction. The interface follows your macOS language by default and remembers a manual selection. Prompt translation defaults to your preferred system language → English. **Read Reply** reverses that pair. macOS may prompt you to install the translation languages on first use.
 
+## App updates
+
+InputTranslator checks GitHub Releases when it starts. To check again, select **Check for Updates…** in the menu bar. When an update is available, confirm the installation and InputTranslator will download the signed update and relaunch. If your installed version has no update menu item, install the latest version from GitHub once to enable in-app updates.
+
+See [Publishing an app update](RELEASING.md) for the release workflow.
+
 ## macOS permissions
 
 | Action | Setup |
