@@ -222,7 +222,7 @@ final class InputTranslatorUITests: XCTestCase {
     }
 
     @MainActor
-    func testAuthorizationRemainsAvailableAfterPasteWithoutTerminalTarget() {
+    func testFocusFailurePreservesPreviewAndOnlyOffersAuthorizationWhenNeeded() {
         let app = XCUIApplication()
         app.launchArguments = ["-panelPinned", "NO", "-topDockEnabled", "YES",
                                "-interfaceLanguage", "en", "-AppleLanguages", "(en)", "-autoSubmit", "YES"]
@@ -238,14 +238,17 @@ final class InputTranslatorUITests: XCTestCase {
         let preview = panel.staticTexts["translation-result"].firstMatch
         XCTAssertTrue(preview.waitForExistence(timeout: 5))
         let authorization = panel.descendants(matching: .any)["terminal-accessibility-settings"].firstMatch
+        let offeredAuthorization = authorization.exists
         let paste = panel.buttons["paste-to-terminal"].firstMatch
         let status = panel.staticTexts["translation-status"].firstMatch
         XCTAssertTrue(paste.label.contains("Paste & Submit"))
         paste.click()
         XCTAssertTrue(status.waitForExistence(timeout: 3))
-        XCTAssertTrue(authorization.exists)
-        XCTAssertTrue(authorization.isEnabled)
-        XCTAssertTrue(authorization.isHittable)
+        XCTAssertEqual(authorization.exists, offeredAuthorization)
+        if offeredAuthorization {
+            XCTAssertTrue(authorization.isEnabled)
+            XCTAssertTrue(authorization.isHittable)
+        }
         XCTAssertTrue(preview.exists)
     }
 

@@ -1,9 +1,95 @@
 import AppKit
+import ApplicationServices
 import Translation
 import XCTest
 @testable import InputTranslator
 
 final class InputTranslatorTests: XCTestCase {
+    @MainActor private func terminalFocusFixture() throws -> (NSRunningApplication, TerminalTarget) {
+        let terminal = (NSRunningApplication.runningApplications(withBundleIdentifier: "com.googlecode.iterm2")
+            + NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Terminal")).first
+        guard let terminal else { throw XCTSkip("A running Terminal or iTerm2 is required for focus capture tests") }
+        let element = AXUIElementCreateApplication(terminal.processIdentifier)
+        return (terminal, TerminalTarget(pid: terminal.processIdentifier, launchDate: terminal.launchDate,
+                                         window: element, input: element))
+    }
+
+    @MainActor func testActivationRetainsVerifiedTerminalDuringTransientFocusReadFailure() async throws {
+        let (terminal, target) = try terminalFocusFixture()
+        var reads = 0
+        let controller = InputController(settings: try isolatedSettings(), readFocusedTarget: { _ in
+            reads += 1
+            return reads == 1 ? target : nil
+        }, accessibilityAccess: { true })
+        controller.activeApplicationChanged(to: terminal)
+        XCTAssertEqual(controller.target, target)
+        controller.activeApplicationChanged(to: terminal)
+        XCTAssertEqual(controller.target, target)
+        try await Task.sleep(for: .milliseconds(100))
+        XCTAssertEqual(reads, 2)
+        XCTAssertEqual(controller.target, target)
+    }
+
+    @MainActor func testTerminalFocusCaptureRetriesAndRejectsAnOutdatedCapture() async throws {
+        let (terminal, target) = try terminalFocusFixture()
+        var reads = 0
+        let controller = InputController(settings: try isolatedSettings(), readFocusedTarget: { _ in
+            reads += 1
+            return reads >= 3 ? target : nil
+        }, accessibilityAccess: { true })
+        controller.activeApplicationChanged(to: terminal)
+        XCTAssertNil(controller.target)
+        for _ in 0..<60 where controller.target == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        XCTAssertEqual(controller.target, target)
+        reads = 0
+        controller.activeApplicationChanged(to: terminal)
+        let finder = try XCTUnwrap(NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first)
+        controller.activeApplicationChanged(to: finder)
+        try await Task.sleep(for: .milliseconds(150))
+        XCTAssertNil(controller.target)
+        XCTAssertNil(controller.targetName)
+        XCTAssertEqual(reads, 1)
+    }
+
+    @MainActor func testChangingTerminalChoiceInvalidatesTheEarlierTarget() throws {
+        let (terminal, target) = try terminalFocusFixture()
+        let settings = try isolatedSettings()
+        let controller = InputController(settings: settings, readFocusedTarget: { _ in target },
+                                         accessibilityAccess: { true })
+        controller.activeApplicationChanged(to: terminal)
+        XCTAssertEqual(controller.target, target)
+        settings.terminal = terminal.bundleIdentifier == "com.googlecode.iterm2" ? .terminal : .iTerm
+        controller.text = "Check the patch."
+        controller.requestPrimaryAction()
+        XCTAssertNil(controller.target)
+        XCTAssertTrue(controller.showsError)
+        XCTAssertFalse(controller.offersAccessibilitySettings)
+        XCTAssertEqual(controller.result, "Check the patch.")
+    }
+
+    @MainActor func testUnverifiedTerminalFocusDoesNotOfferPermissionSettingsWhenAuthorized() throws {
+        let controller = InputController(settings: try isolatedSettings(), accessibilityAccess: { true })
+        controller.text = "Check the patch."
+        controller.requestPrimaryAction()
+        XCTAssertTrue(controller.hasAccessibilityAccess)
+        XCTAssertTrue(controller.showsError)
+        XCTAssertFalse(controller.offersAccessibilitySettings)
+        XCTAssertEqual(controller.text, "Check the patch.")
+        XCTAssertEqual(controller.result, "Check the patch.")
+    }
+
+    @MainActor func testMissingAccessibilityPermissionKeepsAuthorizationAvailable() throws {
+        let controller = InputController(settings: try isolatedSettings(), accessibilityAccess: { false })
+        controller.text = "Check the patch."
+        controller.requestPrimaryAction()
+        XCTAssertFalse(controller.hasAccessibilityAccess)
+        XCTAssertTrue(controller.showsError)
+        XCTAssertTrue(controller.offersAccessibilitySettings)
+        XCTAssertEqual(controller.result, "Check the patch.")
+    }
+
     @MainActor func testProtectedCodeRoundTrip() throws {
         let source = """
         检查 `getUserInfo()` 和 ``含有 ` 的代码``：

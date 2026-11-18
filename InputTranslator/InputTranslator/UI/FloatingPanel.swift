@@ -216,8 +216,8 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     }
 
     override func becomeKey() {
-        super.becomeKey()
         if !isPresenting { controller?.pinnedPanelBecameKey() }
+        super.becomeKey()
     }
 
     func focusEditor() {

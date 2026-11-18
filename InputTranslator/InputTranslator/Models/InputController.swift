@@ -103,7 +103,9 @@ final class InputController: ObservableObject {
 
     @Published private var state = State.idle
     private var request: Request?
-    private var target: TerminalTarget?
+    private(set) var target: TerminalTarget?
+    private var targetCapture: Task<Void, Never>?
+    private var targetCaptureID = UUID()
     private var previousApp: NSRunningApplication?
     private var lastReplyTerminal: NSRunningApplication?
     private var panel: FloatingPanel?
@@ -117,6 +119,8 @@ final class InputController: ObservableObject {
     private let pasteboard: NSPasteboard
     private let hookInstaller: (TerminalAssistant) -> TerminalHookInstaller
     private let readTerminalReply: @MainActor (NSRunningApplication?) async throws -> TerminalReply
+    private let readFocusedTarget: @MainActor (NSRunningApplication) -> TerminalTarget?
+    private let accessibilityAccess: @MainActor () -> Bool
     private var replyReadTask: Task<Void, Never>?
     private var liveReplyTask: Task<Void, Never>?
     private var liveReplyPending = false
@@ -134,7 +138,9 @@ final class InputController: ObservableObject {
         readTerminalReply: @escaping @MainActor (NSRunningApplication?) async throws -> TerminalReply = {
             try await TerminalReplyReader.latest(in: $0)
         },
-        translationResponseTimeout: Duration = .seconds(15)
+        translationResponseTimeout: Duration = .seconds(15),
+        readFocusedTarget: @escaping @MainActor (NSRunningApplication) -> TerminalTarget? = TerminalManager.focusedTarget,
+        accessibilityAccess: @escaping @MainActor () -> Bool = { TerminalManager.hasAccessibilityAccess }
     ) {
         self.pasteboard = pasteboard
         let activeSettings = settings ?? AppSettings()
@@ -144,6 +150,8 @@ final class InputController: ObservableObject {
         self.hookInstaller = hookInstaller
         self.readTerminalReply = readTerminalReply
         self.translationResponseTimeout = translationResponseTimeout
+        self.readFocusedTarget = readFocusedTarget
+        self.accessibilityAccess = accessibilityAccess
     }
 
     var busy: Bool {
@@ -196,9 +204,7 @@ final class InputController: ObservableObject {
     }
 
     var offersAccessibilitySettings: Bool {
-        if !hasAccessibilityAccess { return true }
-        guard case .error(let error, _) = state, let failure = error as? TerminalFailure else { return false }
-        return failure == .permission || failure == .unavailable
+        !hasAccessibilityAccess
     }
 
     var replyRecovery: ReplyRecovery? {
@@ -677,11 +683,11 @@ final class InputController: ObservableObject {
     }
 
     func activeApplicationChanged(to app: NSRunningApplication) {
-        guard settings.panelPinned, panel?.isVisible == true, app != NSRunningApplication.current else { return }
+        guard app != NSRunningApplication.current else { return }
         previousApp = app
-        refreshPermission()
-        targetName = compatibleTerminal(app)?.localizedName
-        target = nil
+        guard !isDelivering else { return }
+        captureTerminalTarget(from: app)
+        guard settings.panelPinned, panel?.isVisible == true else { return }
         performActionWhenReady = false
         cancelConfirmation()
         if TerminalChoice.matches(app.bundleIdentifier) { refreshLiveReply(in: app) }
@@ -714,11 +720,52 @@ final class InputController: ObservableObject {
     }
 
     private func captureTerminalTarget(from app: NSRunningApplication?) {
-        if let app, app != NSRunningApplication.current { previousApp = app }
-        let terminal = compatibleTerminal(app)
+        let source = app == NSRunningApplication.current ? previousApp : app
+        if let source { previousApp = source }
+        targetCapture?.cancel()
+        targetCapture = nil
+        let captureID = UUID()
+        targetCaptureID = captureID
+        let terminal = compatibleTerminal(source)
         refreshPermission()
         targetName = terminal?.localizedName
-        target = terminal.flatMap(TerminalManager.focusedTarget)
+        guard let terminal, hasAccessibilityAccess else {
+            target = nil
+            return
+        }
+        if let focused = readFocusedTarget(terminal) {
+            recordTerminalTarget(focused)
+            return
+        }
+        // Keep a verified target across transient AX read failures. Paste revalidates it before sending keys.
+        if target?.pid != terminal.processIdentifier || target?.launchDate != terminal.launchDate {
+            target = nil
+        }
+        if target != nil { return }
+        targetCapture = Task { [weak self] in
+            defer {
+                if self?.targetCaptureID == captureID { self?.targetCapture = nil }
+            }
+            for _ in 0..<12 {
+                do { try await Task.sleep(for: .milliseconds(35)) } catch { return }
+                guard let self, !Task.isCancelled, self.targetCaptureID == captureID,
+                      self.previousApp?.processIdentifier == terminal.processIdentifier,
+                      self.previousApp?.launchDate == terminal.launchDate,
+                      self.compatibleTerminal(terminal) != nil, !terminal.isTerminated else { return }
+                if let focused = self.readFocusedTarget(terminal) {
+                    self.recordTerminalTarget(focused)
+                    return
+                }
+            }
+        }
+    }
+
+    private func recordTerminalTarget(_ target: TerminalTarget) {
+        self.target = target
+        if case .error(let error, _) = state, let failure = error as? TerminalFailure,
+           failure == .unavailable || failure == .focusChanged {
+            state = result.isEmpty ? .idle : .preview
+        }
     }
 
     func dismissPanel(keepPinned: Bool = false, animateFromDock: Bool = false) {
@@ -748,7 +795,7 @@ final class InputController: ObservableObject {
     }
 
     func refreshPermission() {
-        let granted = TerminalManager.hasAccessibilityAccess
+        let granted = accessibilityAccess()
         if granted != hasAccessibilityAccess { hasAccessibilityAccess = granted }
         if granted, case .error(let error, _) = state, error as? TerminalFailure == .permission {
             state = result.isEmpty ? .idle : .preview
@@ -921,7 +968,38 @@ final class InputController: ObservableObject {
         guard !busy, !result.isEmpty, !isConfirming else { return }
         refreshPermission()
         guard hasAccessibilityAccess else { return showError(TerminalFailure.permission) }
-        guard let target else { return showError(TerminalFailure.unavailable) }
+        if let target, let app = NSRunningApplication(processIdentifier: target.pid), compatibleTerminal(app) == nil {
+            self.target = nil
+        }
+        if target == nil { captureTerminalTarget(from: previousApp) }
+        guard let target else {
+            guard let capture = targetCapture, let source = previousApp else {
+                return showError(TerminalFailure.unavailable)
+            }
+            state = .pasting
+            deliveryTask = Task { [weak self] in
+                await capture.value
+                guard let self else { return }
+                self.deliveryTask = nil
+                guard !Task.isCancelled else {
+                    self.state = .notice(LocalizedMessage("粘贴已取消。"))
+                    return
+                }
+                guard self.panel?.isKeyWindow == true,
+                      self.previousApp?.processIdentifier == source.processIdentifier,
+                      self.previousApp?.launchDate == source.launchDate else {
+                    self.showError(TerminalFailure.focusChanged)
+                    return
+                }
+                self.state = .preview
+                guard self.target != nil else {
+                    self.showError(TerminalFailure.unavailable)
+                    return
+                }
+                self.pasteResult()
+            }
+            return
+        }
 
         let pasteText = result.replacingOccurrences(of: "\r\n", with: "\n")
         guard PasteService.allowsTerminalPaste(pasteText) else { return showError(TerminalFailure.controlCharacters) }

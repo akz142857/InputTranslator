@@ -59,14 +59,16 @@ enum TerminalManager {
             _ = app.activate()
         }
 
-        for _ in 0..<12 {
+        for _ in 0..<18 {
             try Task.checkCancellation()
+            guard hasAccessibilityAccess else { throw TerminalFailure.permission }
             if app.isTerminated { throw TerminalFailure.closed }
-            if app.isActive {
-                guard matchesFocusedTarget(target) else { throw TerminalFailure.focusChanged }
+            if app.isActive, NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid,
+               let focused = focusedTarget(for: app) {
+                guard focused == target else { throw TerminalFailure.focusChanged }
                 return
             }
-            guard NSApp.isActive else { throw TerminalFailure.focusChanged }
+            guard NSApp.isActive || app.isActive else { throw TerminalFailure.focusChanged }
             try await Task.sleep(for: .milliseconds(35))
         }
         throw TerminalFailure.focusChanged
@@ -90,9 +92,9 @@ enum TerminalFailure: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .permission: L10n.text("请在系统设置中授权辅助功能，再从终端唤起输入框。")
-        case .unavailable: L10n.text("无法确认终端输入区域。请点击 Claude Code 的输入区，再从该终端打开输入框。")
+        case .unavailable: L10n.text("暂时无法读取终端输入区。请点击终端输入区后重试。")
         case .closed: L10n.text("原终端已关闭。")
-        case .focusChanged: L10n.text("终端的焦点或输入区域已变化。请回到 Claude Code 后重新打开输入框。")
+        case .focusChanged: L10n.text("终端输入区已变化。请回到要粘贴的标签页或分屏后重试。")
         case .clipboard: L10n.text("剪贴板已发生变化或无法写入，请复制译文后手动粘贴。")
         case .event: L10n.text("系统无法生成粘贴按键，请复制译文后手动粘贴。")
         case .controlCharacters: L10n.text("译文包含终端控制字符，已停止粘贴。")

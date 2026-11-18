@@ -4941,67 +4941,67 @@
         }
       }
     },
-    "无法确认终端输入区域。请点击 Claude Code 的输入区，再从该终端打开输入框。": {
+    "暂时无法读取终端输入区。请点击终端输入区后重试。": {
       "extractionState": "manual",
       "localizations": {
         "ar": {
           "stringUnit": {
             "state": "translated",
-            "value": "تعذر التحقق من حقل الإدخال. انقر حقل إدخال Claude Code وأعد فتح اللوحة من تلك الطرفية."
+            "value": "تعذرت قراءة حقل إدخال الطرفية مؤقتًا. انقر على حقل الإدخال ثم حاول مرة أخرى."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Das Eingabefeld im Terminal konnte nicht bestätigt werden. Klicken Sie in die Eingabe von Claude Code und öffnen Sie das Fenster aus diesem Terminal erneut."
+            "value": "Die Terminaleingabe ist vorübergehend nicht erreichbar. Klicke in das Eingabefeld und versuche es erneut."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The terminal input couldn’t be verified. Click the Claude Code input field and reopen the panel from that terminal."
+            "value": "The terminal input is temporarily unavailable. Click the terminal input field and try again."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "No se pudo verificar la entrada del terminal. Haz clic en el campo de Claude Code y vuelve a abrir el panel desde ese terminal."
+            "value": "La entrada del terminal no está disponible temporalmente. Haz clic en el campo de entrada e inténtalo de nuevo."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Impossible de vérifier la zone de saisie du terminal. Cliquez dans Claude Code et rouvrez le panneau depuis ce terminal."
+            "value": "La saisie du terminal est temporairement indisponible. Cliquez dans le champ de saisie, puis réessayez."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "ターミナルの入力欄を確認できません。Claude Code の入力欄をクリックし、そのターミナルからパネルを開き直してください。"
+            "value": "ターミナルの入力欄を一時的に読み取れません。入力欄をクリックして、もう一度お試しください。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "터미널 입력 영역을 확인할 수 없습니다. Claude Code 입력란을 클릭한 뒤 해당 터미널에서 패널을 다시 여세요."
+            "value": "터미널 입력란을 일시적으로 읽을 수 없습니다. 입력란을 클릭한 후 다시 시도하세요."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "Não foi possível confirmar a área de entrada. Clique no campo do Claude Code e reabra o painel por esse terminal."
+            "value": "A entrada do terminal está temporariamente indisponível. Clique no campo de entrada e tente novamente."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "无法确认终端输入区域。请点击 Claude Code 的输入区，再从该终端打开输入框。"
+            "value": "暂时无法读取终端输入区。请点击终端输入区后重试。"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "無法確認終端機輸入區域。請點擊 Claude Code 的輸入區，再從這個終端機開啟輸入框。"
+            "value": "暫時無法讀取終端機輸入區。請點選輸入區後重試。"
           }
         }
       }
@@ -7541,67 +7541,67 @@
         }
       }
     },
-    "终端的焦点或输入区域已变化。请回到 Claude Code 后重新打开输入框。": {
+    "终端输入区已变化。请回到要粘贴的标签页或分屏后重试。": {
       "extractionState": "manual",
       "localizations": {
         "ar": {
           "stringUnit": {
             "state": "translated",
-            "value": "تغير التركيز أو حقل الإدخال في الطرفية. ارجع إلى Claude Code وأعد فتح اللوحة."
+            "value": "تغير حقل إدخال الطرفية. ارجع إلى علامة التبويب أو الجزء المقصود ثم حاول مرة أخرى."
           }
         },
         "de": {
           "stringUnit": {
             "state": "translated",
-            "value": "Fokus oder Eingabefeld im Terminal haben sich geändert. Wechseln Sie zu Claude Code und öffnen Sie das Fenster erneut."
+            "value": "Die Terminaleingabe hat sich geändert. Wechsle zum gewünschten Tab oder Teilfenster und versuche es erneut."
           }
         },
         "en": {
           "stringUnit": {
             "state": "translated",
-            "value": "The terminal focus or input area changed. Return to Claude Code and reopen the panel."
+            "value": "The terminal input has changed. Return to the intended tab or split pane and try again."
           }
         },
         "es": {
           "stringUnit": {
             "state": "translated",
-            "value": "El foco o el área de entrada cambió. Vuelve a Claude Code y abre el panel de nuevo."
+            "value": "La entrada del terminal ha cambiado. Vuelve a la pestaña o al panel de destino e inténtalo de nuevo."
           }
         },
         "fr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Le focus ou la zone de saisie a changé. Revenez dans Claude Code et rouvrez le panneau."
+            "value": "La saisie du terminal a changé. Revenez à l’onglet ou au volet de destination, puis réessayez."
           }
         },
         "ja": {
           "stringUnit": {
             "state": "translated",
-            "value": "ターミナルのフォーカスまたは入力欄が変わりました。Claude Code に戻ってパネルを開き直してください。"
+            "value": "ターミナルの入力先が変わりました。貼り付け先のタブまたは分割ペインに戻って、もう一度お試しください。"
           }
         },
         "ko": {
           "stringUnit": {
             "state": "translated",
-            "value": "터미널 포커스 또는 입력 영역이 바뀌었습니다. Claude Code로 돌아가 패널을 다시 여세요."
+            "value": "터미널 입력 위치가 변경되었습니다. 붙여넣을 탭이나 분할 창으로 돌아가 다시 시도하세요."
           }
         },
         "pt-BR": {
           "stringUnit": {
             "state": "translated",
-            "value": "O foco ou área de entrada mudou. Volte ao Claude Code e reabra o painel."
+            "value": "A entrada do terminal mudou. Volte à aba ou ao painel de destino e tente novamente."
           }
         },
         "zh-Hans": {
           "stringUnit": {
             "state": "translated",
-            "value": "终端的焦点或输入区域已变化。请回到 Claude Code 后重新打开输入框。"
+            "value": "终端输入区已变化。请回到要粘贴的标签页或分屏后重试。"
           }
         },
         "zh-Hant": {
           "stringUnit": {
             "state": "translated",
-            "value": "終端機的焦點或輸入區域已變化。請回到 Claude Code 後重新開啟輸入框。"
+            "value": "終端機輸入區已變更。請回到要貼上的分頁或分割視窗後重試。"
           }
         }
       }
