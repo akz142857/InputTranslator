@@ -4,8 +4,8 @@ import SwiftUI
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
-    private let updater = AppUpdater()
     private let controller = InputController()
+    private var updater: AppUpdater { controller.updater }
     private lazy var hotkeys = HotkeyManager { [weak self] in self?.controller.toggleComposer() }
     private lazy var replyHotkey = HotkeyManager(signature: 0x49545252) { [weak self] in
         self?.controller.openLatestTerminalReply()

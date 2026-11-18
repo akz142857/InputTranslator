@@ -72,6 +72,7 @@ final class InputController: ObservableObject {
     }
 
     private let logger = Logger(subsystem: "com.claycosmos.InputTranslator", category: "workflow")
+    let updater = AppUpdater()
     let settings: AppSettings
     @Published var hotkeyMessage: LocalizedMessage?
     @Published var settingsPane = SettingsPane.general

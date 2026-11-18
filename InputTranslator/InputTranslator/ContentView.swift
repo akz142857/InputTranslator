@@ -69,6 +69,7 @@ struct ContentView: View {
                 )
                 .fixedSize()
                 Spacer(minLength: 0)
+                UpdateAvailableButton(updater: controller.updater)
                 windowControls
             }
         }
@@ -483,6 +484,34 @@ struct ContentView: View {
                 .font(.caption)
                 .opacity(0.88)
                 .accessibilityHidden(true)
+        }
+    }
+}
+
+private struct UpdateAvailableButton: View {
+    @ObservedObject var updater: AppUpdater
+
+    var body: some View {
+        if let version = updater.availableVersion {
+            Button {
+                updater.checkForUpdates(nil)
+            } label: {
+                ViewThatFits(in: .horizontal) {
+                    Label(L10n.text("有新版本"), systemImage: "arrow.down.circle.fill")
+                        .fixedSize()
+                    Image(systemName: "arrow.down.circle.fill")
+                }
+                .font(.system(size: 12, weight: .medium))
+                .padding(.horizontal, 10)
+                .frame(height: 28)
+                .contentShape(Capsule())
+            }
+            .buttonStyle(.borderless)
+            .foregroundStyle(.tint)
+            .modifier(WindowControlMaterial())
+            .help(L10n.text("更新至 v%@", version))
+            .accessibilityLabel(L10n.text("更新至 v%@", version))
+            .accessibilityIdentifier("panel-update-available")
         }
     }
 }

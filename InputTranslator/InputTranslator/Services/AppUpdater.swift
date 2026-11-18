@@ -1,15 +1,16 @@
 import AppKit
+import Combine
 import Sparkle
 
 @MainActor
-final class AppUpdater: NSObject, NSMenuItemValidation {
+final class AppUpdater: NSObject, ObservableObject, NSMenuItemValidation, SPUUpdaterDelegate {
+    @Published private(set) var availableVersion: String?
     private let userDriver: UpdateUserDriver
-    private let updater: SPUUpdater
+    private lazy var updater = SPUUpdater(hostBundle: .main, applicationBundle: .main,
+                                         userDriver: userDriver, delegate: self)
 
     override init() {
-        let bundle = Bundle.main
-        userDriver = UpdateUserDriver(hostBundle: bundle, delegate: nil)
-        updater = SPUUpdater(hostBundle: bundle, applicationBundle: bundle, userDriver: userDriver, delegate: nil)
+        userDriver = UpdateUserDriver(hostBundle: .main, delegate: nil)
         super.init()
     }
 
@@ -31,6 +32,19 @@ final class AppUpdater: NSObject, NSMenuItemValidation {
 
     func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
         updater.canCheckForUpdates
+    }
+
+    func updater(_ updater: SPUUpdater, didFindValidUpdate item: SUAppcastItem) {
+        availableVersion = item.displayVersionString
+    }
+
+    func updaterDidNotFindUpdate(_ updater: SPUUpdater, error: Error) {
+        availableVersion = nil
+    }
+
+    func updater(_ updater: SPUUpdater, userDidMake choice: SPUUserUpdateChoice,
+                 forUpdate updateItem: SUAppcastItem, state: SPUUserUpdateState) {
+        if choice != .dismiss { availableVersion = nil }
     }
 }
 
