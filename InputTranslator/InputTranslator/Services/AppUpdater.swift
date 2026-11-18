@@ -5,12 +5,13 @@ import Sparkle
 @MainActor
 final class AppUpdater: NSObject, ObservableObject, NSMenuItemValidation, SPUUpdaterDelegate {
     @Published private(set) var availableVersion: String?
+    private let windowPresentation = UpdateWindowPresentation()
     private let userDriver: UpdateUserDriver
     private lazy var updater = SPUUpdater(hostBundle: .main, applicationBundle: .main,
                                          userDriver: userDriver, delegate: self)
 
     override init() {
-        userDriver = UpdateUserDriver(hostBundle: .main, delegate: nil)
+        userDriver = UpdateUserDriver(hostBundle: .main, presentation: windowPresentation)
         super.init()
     }
 
@@ -49,16 +50,49 @@ final class AppUpdater: NSObject, ObservableObject, NSMenuItemValidation, SPUUpd
 }
 
 @MainActor
-private final class UpdateUserDriver: SPUStandardUserDriver {
+final class UpdateUserDriver: SPUStandardUserDriver {
+    private let presentation: UpdateWindowPresentation
     private var installConfirmed = false
+
+    init(hostBundle: Bundle, presentation: UpdateWindowPresentation) {
+        self.presentation = presentation
+        super.init(hostBundle: hostBundle, delegate: presentation)
+    }
+
+    override func show(_ request: SPUUpdatePermissionRequest,
+                       reply: @escaping (SUUpdatePermissionResponse) -> Void) {
+        presentation.beginSession()
+        super.show(request, reply: reply)
+        presentation.refresh()
+    }
+
+    override func showUserInitiatedUpdateCheck(cancellation: @escaping () -> Void) {
+        presentation.beginSession()
+        super.showUserInitiatedUpdateCheck(cancellation: cancellation)
+        presentation.refresh()
+    }
 
     override func showUpdateFound(with appcastItem: SUAppcastItem, state: SPUUserUpdateState,
                                   reply: @escaping (SPUUserUpdateChoice) -> Void) {
         installConfirmed = false
+        presentation.beginSession()
         super.showUpdateFound(with: appcastItem, state: state) { [weak self] choice in
             self?.installConfirmed = choice == .install && !appcastItem.isInformationOnlyUpdate
             reply(choice)
         }
+        presentation.refresh()
+    }
+
+    override func showDownloadInitiated(cancellation: @escaping () -> Void) {
+        presentation.beginSession()
+        super.showDownloadInitiated(cancellation: cancellation)
+        presentation.refresh()
+    }
+
+    override func showUpdateInFocus() {
+        presentation.beginSession()
+        super.showUpdateInFocus()
+        presentation.refresh()
     }
 
     override func showReady(toInstallAndRelaunch reply: @escaping (SPUUserUpdateChoice) -> Void) {
@@ -73,5 +107,6 @@ private final class UpdateUserDriver: SPUStandardUserDriver {
     override func dismissUpdateInstallation() {
         installConfirmed = false
         super.dismissUpdateInstallation()
+        presentation.finishSession()
     }
 }
