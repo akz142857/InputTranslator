@@ -3,31 +3,41 @@ import Carbon
 
 @MainActor
 enum PasteService {
+    struct Environment {
+        var board: NSPasteboard = .general
+        var restoreFocus: (ApplicationTarget) async throws -> Void = ApplicationTargetManager.restoreFocus
+        var matchesFocus: (ApplicationTarget) async -> Bool = ApplicationTargetManager.matchesFocusedTarget
+        var post: (CGEvent, pid_t) -> Void = { $0.postToPid($1) }
+        var waitForPaste: () async -> Void = { try? await Task.sleep(for: .milliseconds(350)) }
+    }
+
     enum Outcome: Equatable {
         case pastePosted, enterPosted, enterSkipped
     }
 
     static func paste(
         _ text: String,
-        into target: TerminalTarget,
+        into target: ApplicationTarget,
         autoSubmit: Bool,
         preserveClipboard: Bool,
-        willPostPaste: () -> Void
+        willPostPaste: () -> Void,
+        environment: Environment? = nil
     ) async throws -> Outcome {
-        guard allowsTerminalPaste(text) else { throw TerminalFailure.controlCharacters }
+        let environment = environment ?? Environment()
+        guard allowsPaste(text) else { throw PasteFailure.controlCharacters }
         let shouldSubmit = autoSubmit && !requiresConfirmation(text: text)
-        try await TerminalManager.restoreFocus(to: target)
+        try await environment.restoreFocus(target)
         try Task.checkCancellation()
 
         guard let paste = keyEvents(key: CGKeyCode(kVK_ANSI_V), flags: .maskCommand) else {
-            throw TerminalFailure.event
+            throw PasteFailure.event
         }
         let enter = shouldSubmit ? keyEvents(key: CGKeyCode(kVK_Return), flags: []) : nil
-        let board = NSPasteboard.general
+        let board = environment.board
         let originalChangeCount = board.changeCount
         let saved = preserveClipboard ? try snapshot(board) : []
-        guard TerminalManager.matchesFocusedTarget(target) else { throw TerminalFailure.focusChanged }
-        guard board.changeCount == originalChangeCount else { throw TerminalFailure.clipboard }
+        guard await environment.matchesFocus(target) else { throw PasteFailure.focusChanged }
+        guard board.changeCount == originalChangeCount else { throw PasteFailure.clipboard }
 
         let writtenChangeCount = board.declareTypes([.string], owner: nil)
         defer {
@@ -37,27 +47,28 @@ enum PasteService {
             }
         }
         guard board.changeCount == writtenChangeCount, board.setString(text, forType: .string) else {
-            throw TerminalFailure.clipboard
+            throw PasteFailure.clipboard
         }
-        guard TerminalManager.matchesFocusedTarget(target) else { throw TerminalFailure.focusChanged }
-        guard board.changeCount == writtenChangeCount else { throw TerminalFailure.clipboard }
+        guard await environment.matchesFocus(target) else { throw PasteFailure.focusChanged }
+        guard board.changeCount == writtenChangeCount else { throw PasteFailure.clipboard }
         try Task.checkCancellation()
 
         willPostPaste()
-        paste.down.postToPid(target.pid)
-        paste.up.postToPid(target.pid)
+        environment.post(paste.down, target.pid)
+        environment.post(paste.up, target.pid)
 
-        // Allow the terminal's paste handler to read the pasteboard before restoring it.
-        try? await Task.sleep(for: .milliseconds(350))
+        // Allow the destination's paste handler to read the pasteboard before restoring it.
+        await environment.waitForPaste()
         guard shouldSubmit else { return autoSubmit ? .enterSkipped : .pastePosted }
         guard !Task.isCancelled, board.changeCount == writtenChangeCount,
-              TerminalManager.matchesFocusedTarget(target), let enter else { return .enterSkipped }
-        enter.down.postToPid(target.pid)
-        enter.up.postToPid(target.pid)
+              await environment.matchesFocus(target), let enter else { return .enterSkipped }
+        guard !Task.isCancelled, board.changeCount == writtenChangeCount else { return .enterSkipped }
+        environment.post(enter.down, target.pid)
+        environment.post(enter.up, target.pid)
         return .enterPosted
     }
 
-    static func allowsTerminalPaste(_ text: String) -> Bool {
+    static func allowsPaste(_ text: String) -> Bool {
         text.unicodeScalars.allSatisfy { scalar in
             scalar == "\n" || scalar == "\t"
                 || (scalar.properties.generalCategory != .control && !CharacterSet.newlines.contains(scalar))
@@ -70,18 +81,18 @@ enum PasteService {
 
     static func snapshot(_ board: NSPasteboard, byteLimit: Int = 64 * 1024 * 1024) throws -> [NSPasteboardItem] {
         let originals = board.pasteboardItems ?? []
-        guard originals.count <= 1_024 else { throw TerminalFailure.clipboard }
+        guard originals.count <= 1_024 else { throw PasteFailure.clipboard }
         var remainingBytes = byteLimit
         var remainingTypes = 4_096
         return try originals.map { original in
             let item = NSPasteboardItem()
             let types = original.types
             remainingTypes -= types.count
-            guard remainingTypes >= 0, !types.isEmpty else { throw TerminalFailure.clipboard }
+            guard remainingTypes >= 0, !types.isEmpty else { throw PasteFailure.clipboard }
             for type in types {
                 guard let data = original.data(forType: type), data.count <= remainingBytes,
                       item.setData(data, forType: type) else {
-                    throw TerminalFailure.clipboard
+                    throw PasteFailure.clipboard
                 }
                 remainingBytes -= data.count
             }

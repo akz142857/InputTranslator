@@ -271,7 +271,7 @@ struct ContentView: View {
                 .font(.headline)
                 .accessibilityAddTraits(.isHeader)
                 .accessibilityIdentifier("reply-empty-state")
-            Text(controller.message ?? (controller.targetName == nil
+            Text(controller.message ?? (!controller.supportsReplyReading
                 ? L10n.text("从 Terminal 或 iTerm2 打开可读取当前会话，也可以翻译复制好的回复。")
                 : L10n.text("等助手回复完成后自动翻译。")))
                 .font(.callout)
@@ -283,7 +283,7 @@ struct ContentView: View {
                 if let recovery = controller.replyRecovery {
                     recoveryButton(recovery, prominent: true)
                     clipboardButton()
-                } else if controller.targetName != nil {
+                } else if controller.supportsReplyReading {
                     TranslationActionButton(prominent: true, action: controller.openLatestTerminalReply) {
                         Text(L10n.text("读取当前会话"))
                     }
@@ -377,17 +377,17 @@ struct ContentView: View {
                 progress(message)
             } else if !controller.isConfirming {
                 if let name = controller.targetName {
-                    Label(name, systemImage: "terminal")
+                    Label(name, systemImage: controller.targetSymbol)
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
-                        .accessibilityLabel(L10n.text("目标终端，%@", name))
+                        .accessibilityLabel(L10n.text("目标应用，%@", name))
                 }
                 if controller.offersAccessibilitySettings {
                     Button(L10n.text(controller.hasAccessibilityAccess ? "打开系统设置…" : "授权…"),
-                           action: TerminalManager.openAccessibilitySettings)
+                           action: ApplicationTargetManager.openAccessibilitySettings)
                         .buttonStyle(.link)
-                        .help(L10n.text("打开系统设置，允许粘贴到终端"))
+                        .help(L10n.text("打开系统设置，允许粘贴到其他应用"))
                         .accessibilityIdentifier("terminal-accessibility-settings")
                 }
             }
@@ -416,9 +416,8 @@ struct ContentView: View {
                 .accessibilityLabel(L10n.text("复制译文"))
                 .help(L10n.text("复制译文"))
             }
-            let submit = controller.willSubmitPrompt
-            primaryAction(L10n.text(submit ? "粘贴并提交" : "粘贴到终端"))
-                .help(L10n.text(submit ? "粘贴并提交" : "粘贴译文到原终端（⌘↵）"))
+            primaryAction(controller.pasteActionTitle)
+                .help(L10n.text(controller.willSubmitPrompt ? "粘贴并提交" : "粘贴译文到原输入位置（⌘↵）"))
                 .accessibilityIdentifier("paste-to-terminal")
         }
     }
@@ -427,7 +426,7 @@ struct ContentView: View {
         HStack(spacing: 8) {
             if let recovery = controller.replyRecovery {
                 recoveryButton(recovery)
-            } else if controller.targetName != nil {
+            } else if controller.supportsReplyReading {
                 Button(action: controller.openLatestTerminalReply) {
                     Label(L10n.text("读最新回复"), systemImage: "arrow.clockwise")
                 }

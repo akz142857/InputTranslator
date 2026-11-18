@@ -3,29 +3,45 @@ import Carbon
 import Combine
 import ServiceManagement
 
-enum TerminalChoice: String, CaseIterable, Identifiable {
-    case lastActive, terminal, iTerm
+struct PasteDestination: RawRepresentable, Hashable, Identifiable {
+    let rawValue: String
+    var id: String { rawValue }
 
-    var id: Self { self }
+    static let currentApplication = Self(rawValue: "lastActive")
+    static let terminal = Self(rawValue: "com.apple.Terminal")
+    static let iTerm = Self(rawValue: "com.googlecode.iterm2")
+    static let herdr = Self(rawValue: "dev.herdr.app")
+
+    init(rawValue: String) {
+        switch rawValue {
+        case "", "lastActive": self.rawValue = "lastActive"
+        case "terminal": self.rawValue = Self.terminal.rawValue
+        case "iTerm": self.rawValue = Self.iTerm.rawValue
+        default: self.rawValue = rawValue
+        }
+    }
+
+    var bundleIdentifier: String? { self == .currentApplication ? nil : rawValue }
 
     var title: String {
-        switch self {
-        case .lastActive: L10n.text("当前终端")
-        case .terminal: "Terminal"
-        case .iTerm: "iTerm2"
+        guard let bundleIdentifier else { return L10n.text("当前应用") }
+        if let app = NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).first,
+           let name = app.localizedName { return name }
+        if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleIdentifier) {
+            return FileManager.default.displayName(atPath: url.path).replacingOccurrences(of: ".app", with: "")
         }
+        return self == .terminal ? "Terminal" : self == .iTerm ? "iTerm2" : self == .herdr ? "Herdr" : bundleIdentifier
     }
 
-    var bundleIdentifier: String? {
-        switch self {
-        case .lastActive: nil
-        case .terminal: "com.apple.Terminal"
-        case .iTerm: "com.googlecode.iterm2"
+    static func choices(including selected: Self) -> [Self] {
+        let running = NSWorkspace.shared.runningApplications.filter {
+            $0.activationPolicy == .regular && $0 != .current
+        }.compactMap(\.bundleIdentifier).map { Self(rawValue: $0) }
+        let installed = [Self.terminal, .iTerm, .herdr].filter {
+            NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0.rawValue) != nil
         }
-    }
-
-    static func matches(_ bundleIdentifier: String?) -> Bool {
-        bundleIdentifier != nil && allCases.contains { $0.bundleIdentifier == bundleIdentifier }
+        return [.currentApplication] + Set(running + installed + [selected]).filter { $0 != .currentApplication }
+            .sorted { $0.title.localizedStandardCompare($1.title) == .orderedAscending }
     }
 }
 
@@ -98,8 +114,10 @@ final class AppSettings: ObservableObject {
     private static let dockSidePreferenceKey = "keepDockedPanelBesideLauncher"
     private let defaults: UserDefaults
 
-    @Published var autoSubmit: Bool { didSet { defaults.set(autoSubmit, forKey: "autoSubmit") } }
-    @Published var terminal: TerminalChoice { didSet { defaults.set(terminal.rawValue, forKey: "targetTerminal") } }
+    @Published var pasteDestination: PasteDestination {
+        didSet { defaults.set(pasteDestination.rawValue, forKey: "targetApplication") }
+    }
+    @Published private(set) var submissionByApplication: [String: Bool]
     @Published var clearAfterPaste: Bool { didSet { defaults.set(clearAfterPaste, forKey: "clearInputAfterSuccess") } }
     @Published var preserveClipboard: Bool { didSet { defaults.set(preserveClipboard, forKey: "preserveClipboard") } }
     @Published var panelPinned: Bool { didSet { defaults.set(panelPinned, forKey: "panelPinned") } }
@@ -123,8 +141,11 @@ final class AppSettings: ObservableObject {
     init(defaults: UserDefaults = .standard, preferredLanguage: String? = Locale.preferredLanguages.first) {
         self.defaults = defaults
         defaults.register(defaults: ["clearInputAfterSuccess": true, "preserveClipboard": true, "topDockEnabled": true])
-        autoSubmit = defaults.bool(forKey: "autoSubmit")
-        terminal = TerminalChoice(rawValue: defaults.string(forKey: "targetTerminal") ?? "") ?? .lastActive
+        pasteDestination = PasteDestination(rawValue: defaults.string(forKey: "targetApplication")
+            ?? defaults.string(forKey: "targetTerminal") ?? "lastActive")
+        submissionByApplication = defaults.dictionary(forKey: "submissionByApplication") as? [String: Bool]
+            ?? [PasteDestination.terminal.rawValue: defaults.bool(forKey: "autoSubmit"),
+                PasteDestination.iTerm.rawValue: defaults.bool(forKey: "autoSubmit")]
         clearAfterPaste = defaults.bool(forKey: "clearInputAfterSuccess")
         preserveClipboard = defaults.bool(forKey: "preserveClipboard")
         let wasPinned = defaults.bool(forKey: "panelPinned")
@@ -165,6 +186,16 @@ final class AppSettings: ObservableObject {
             hotkey = .standard
         }
         loginStatus = SMAppService.mainApp.status
+    }
+
+    func automaticallySubmits(to bundleIdentifier: String?) -> Bool {
+        guard let bundleIdentifier else { return false }
+        return submissionByApplication[bundleIdentifier] ?? false
+    }
+
+    func setAutomaticallySubmits(_ enabled: Bool, to bundleIdentifier: String) {
+        submissionByApplication[bundleIdentifier] = enabled
+        defaults.set(submissionByApplication, forKey: "submissionByApplication")
     }
 
     private static func loadPlacement(_ key: String, from defaults: UserDefaults) -> PinnedPanelPlacement? {

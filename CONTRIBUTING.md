@@ -10,7 +10,7 @@ For a security issue, follow the [security policy](SECURITY.md).
 
 Follow the [build instructions](README.md#build-from-source) and [test instructions](README.md#test) in the README. Use a local build for development. Developer ID signing and notarization are used for distribution.
 
-For changes to terminal paste or assistant reply reading, test the affected workflow in Terminal and iTerm2. Check that a failed focus check preserves the translation, that multiline paste requires confirmation, and that clipboard restoration preserves text copied during the operation. For changes to translation, try a prompt with inline code, a fenced code block, and input method composition.
+For paste changes, test Terminal, iTerm2, Herdr, and standard native/browser text inputs. Verify window and split-pane changes, per-app submit settings and migration, and exclusion of password fields. For assistant reply reading, test Terminal and iTerm2 separately from general paste support. Check that a failed focus check preserves the translation, that multiline paste requires confirmation, and that clipboard restoration preserves text copied during the operation. For changes to translation, try a prompt with inline code, a fenced code block, and input method composition.
 
 ## Open a pull request
 

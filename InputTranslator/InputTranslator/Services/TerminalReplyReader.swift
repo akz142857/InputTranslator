@@ -1,6 +1,10 @@
 import AppKit
 
 enum TerminalReplyReader {
+    static func supports(_ bundleIdentifier: String?) -> Bool {
+        guard let bundleIdentifier else { return false }
+        return [PasteDestination.terminal.rawValue, PasteDestination.iTerm.rawValue].contains(bundleIdentifier)
+    }
     private static let queue = DispatchQueue(label: "com.claycosmos.InputTranslator.terminal-replies",
                                              qos: .userInitiated)
     static func openAutomationSettings() {
@@ -13,9 +17,9 @@ enum TerminalReplyReader {
         guard let terminal, !terminal.isTerminated else { throw Failure.terminalRequired }
         let command: String
         switch terminal.bundleIdentifier {
-        case TerminalChoice.terminal.bundleIdentifier:
+        case PasteDestination.terminal.bundleIdentifier:
             command = #"tell application id "com.apple.Terminal" to get tty of selected tab of front window"#
-        case TerminalChoice.iTerm.bundleIdentifier:
+        case PasteDestination.iTerm.bundleIdentifier:
             command = #"tell application id "com.googlecode.iterm2" to get tty of current session of current window"#
         default:
             throw Failure.terminalRequired

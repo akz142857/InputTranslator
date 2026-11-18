@@ -32,7 +32,7 @@ final class InputController: ObservableObject {
     }
 
     private struct Delivery {
-        let target: TerminalTarget
+        let target: ApplicationTarget
         let text: String
         let autoSubmit: Bool
     }
@@ -97,13 +97,14 @@ final class InputController: ObservableObject {
     @Published private(set) var isEditingReplySource = false
     @Published private(set) var replyOrigin: ReplyOrigin?
     @Published private(set) var targetName: String?
+    @Published private(set) var targetBundleIdentifier: String?
     @Published private(set) var hasAccessibilityAccess = false
     @Published private(set) var sessionRequest: SessionRequest?
     var requestID: UUID? { request?.id }
 
     @Published private var state = State.idle
     private var request: Request?
-    private(set) var target: TerminalTarget?
+    private(set) var target: ApplicationTarget?
     private var targetCapture: Task<Void, Never>?
     private var targetCaptureID = UUID()
     private var previousApp: NSRunningApplication?
@@ -119,7 +120,7 @@ final class InputController: ObservableObject {
     private let pasteboard: NSPasteboard
     private let hookInstaller: (TerminalAssistant) -> TerminalHookInstaller
     private let readTerminalReply: @MainActor (NSRunningApplication?) async throws -> TerminalReply
-    private let readFocusedTarget: @MainActor (NSRunningApplication) -> TerminalTarget?
+    private let readFocusedTarget: @MainActor (NSRunningApplication) async -> ApplicationTarget?
     private let accessibilityAccess: @MainActor () -> Bool
     private var replyReadTask: Task<Void, Never>?
     private var liveReplyTask: Task<Void, Never>?
@@ -139,8 +140,8 @@ final class InputController: ObservableObject {
             try await TerminalReplyReader.latest(in: $0)
         },
         translationResponseTimeout: Duration = .seconds(15),
-        readFocusedTarget: @escaping @MainActor (NSRunningApplication) -> TerminalTarget? = TerminalManager.focusedTarget,
-        accessibilityAccess: @escaping @MainActor () -> Bool = { TerminalManager.hasAccessibilityAccess }
+        readFocusedTarget: @escaping @MainActor (NSRunningApplication) async -> ApplicationTarget? = ApplicationTargetManager.focusedTarget,
+        accessibilityAccess: @escaping @MainActor () -> Bool = { ApplicationTargetManager.hasAccessibilityAccess }
     ) {
         self.pasteboard = pasteboard
         let activeSettings = settings ?? AppSettings()
@@ -181,8 +182,43 @@ final class InputController: ObservableObject {
     }
 
     var willSubmitPrompt: Bool {
-        settings.autoSubmit && !PasteService.requiresConfirmation(text: text)
+        automaticallySubmitsToTarget && !PasteService.requiresConfirmation(text: text)
             && !PasteService.requiresConfirmation(text: result)
+    }
+
+    var submissionBundleIdentifier: String? {
+        settings.pasteDestination.bundleIdentifier ?? targetBundleIdentifier
+    }
+
+    var submissionApplicationName: String? {
+        if settings.pasteDestination != .currentApplication { return settings.pasteDestination.title }
+        return targetName
+    }
+
+    var automaticallySubmitsToTarget: Bool {
+        settings.automaticallySubmits(to: submissionBundleIdentifier)
+    }
+
+    func setAutomaticallySubmitsToTarget(_ enabled: Bool) {
+        guard !isDelivering, let bundleIdentifier = submissionBundleIdentifier else { return }
+        settings.setAutomaticallySubmits(enabled, to: bundleIdentifier)
+    }
+
+    var supportsReplyReading: Bool { TerminalReplyReader.supports(targetBundleIdentifier) }
+    var targetSymbol: String { supportsReplyReading || targetBundleIdentifier == PasteDestination.herdr.rawValue
+        ? "terminal" : "app" }
+
+    var pasteActionTitle: String {
+        if willSubmitPrompt { return L10n.text("粘贴并提交") }
+        return targetName.map { L10n.text("粘贴到 %@", $0) } ?? L10n.text("粘贴译文")
+    }
+
+    func selectPasteDestination(_ destination: PasteDestination) {
+        guard !isDelivering else { return }
+        settings.pasteDestination = destination
+        cancelConfirmation()
+        target = nil
+        captureApplicationTarget(from: previousApp)
     }
 
     var message: String? {
@@ -191,8 +227,8 @@ final class InputController: ObservableObject {
         case .translating: request?.availability == .supported ? L10n.text("正在准备语言包…") : L10n.text("正在翻译…")
         case .preview: nil
         case .confirmation:
-            L10n.text("请确认 %@ 中的助手能接收多行粘贴。", targetName ?? L10n.text("当前终端"))
-        case .pasting, .pastePosted: L10n.text("正在向终端粘贴…")
+            L10n.text("请确认 %@ 能接收多行粘贴。", targetName ?? L10n.text("当前应用"))
+        case .pasting, .pastePosted: L10n.text("正在粘贴译文…")
         case .error(let error, _): error.localizedDescription
         case .notice(let message): message.text
         }
@@ -385,12 +421,14 @@ final class InputController: ObservableObject {
 
     private var replyTerminal: NSRunningApplication? {
         let frontmost = NSWorkspace.shared.frontmostApplication
-        if let frontmost, TerminalChoice.matches(frontmost.bundleIdentifier) { return frontmost }
+        if let frontmost, TerminalReplyReader.supports(frontmost.bundleIdentifier) { return frontmost }
+        // A newly selected app must not inherit the last terminal's reply session.
+        if let frontmost, frontmost != .current { return nil }
         guard panel?.isKeyWindow == true || (settings.panelPinned && panel?.isVisible == true) else {
             return nil
         }
-        if let previousApp, !previousApp.isTerminated, TerminalChoice.matches(previousApp.bundleIdentifier) {
-            return previousApp
+        if let previousApp, !previousApp.isTerminated {
+            return TerminalReplyReader.supports(previousApp.bundleIdentifier) ? previousApp : nil
         }
         guard let lastReplyTerminal, !lastReplyTerminal.isTerminated else { return nil }
         return lastReplyTerminal
@@ -398,7 +436,7 @@ final class InputController: ObservableObject {
 
     func showReplyMode() {
         guard canSwitchMode, mode != .readReply else { return }
-        if TerminalChoice.matches(replyTerminal?.bundleIdentifier) {
+        if TerminalReplyReader.supports(replyTerminal?.bundleIdentifier) {
             openLatestTerminalReply()
         } else {
             revealsReplySource = false
@@ -679,18 +717,18 @@ final class InputController: ObservableObject {
         guard settings.panelPinned, !isDelivering else { return }
         let frontmost = NSWorkspace.shared.frontmostApplication
         let source = frontmost == NSRunningApplication.current ? previousApp : frontmost
-        captureTerminalTarget(from: source)
+        captureApplicationTarget(from: source)
     }
 
     func activeApplicationChanged(to app: NSRunningApplication) {
         guard app != NSRunningApplication.current else { return }
         previousApp = app
         guard !isDelivering else { return }
-        captureTerminalTarget(from: app)
+        captureApplicationTarget(from: app)
         guard settings.panelPinned, panel?.isVisible == true else { return }
         performActionWhenReady = false
         cancelConfirmation()
-        if TerminalChoice.matches(app.bundleIdentifier) { refreshLiveReply(in: app) }
+        if TerminalReplyReader.supports(app.bundleIdentifier) { refreshLiveReply(in: app) }
     }
 
     private func showPanel(originalApp: NSRunningApplication? = nil, activating: Bool = true, animateFromDock: Bool = false) {
@@ -700,7 +738,7 @@ final class InputController: ObservableObject {
         }
         guard panel?.isKeyWindow != true, !isDelivering else { return }
         let frontmost = originalApp ?? NSWorkspace.shared.frontmostApplication
-        captureTerminalTarget(from: frontmost)
+        captureApplicationTarget(from: frontmost)
         cancelConfirmation()
         if panel == nil {
             panel = FloatingPanel(controller: self)
@@ -712,57 +750,59 @@ final class InputController: ObservableObject {
         schedulePreview()
     }
 
-    private func compatibleTerminal(_ app: NSRunningApplication?) -> NSRunningApplication? {
-        let selection = settings.terminal
-        guard let app, TerminalChoice.matches(app.bundleIdentifier),
-              selection == .lastActive || selection.bundleIdentifier == app.bundleIdentifier else { return nil }
+    private func compatibleApplication(_ app: NSRunningApplication?) -> NSRunningApplication? {
+        let selection = settings.pasteDestination
+        guard let app, app != .current, !app.isTerminated, app.bundleIdentifier != nil,
+              selection == .currentApplication || selection.bundleIdentifier == app.bundleIdentifier else { return nil }
         return app
     }
 
-    private func captureTerminalTarget(from app: NSRunningApplication?) {
+    private func captureApplicationTarget(from app: NSRunningApplication?) {
         let source = app == NSRunningApplication.current ? previousApp : app
         if let source { previousApp = source }
         targetCapture?.cancel()
         targetCapture = nil
         let captureID = UUID()
         targetCaptureID = captureID
-        let terminal = compatibleTerminal(source)
+        let application = compatibleApplication(source)
         refreshPermission()
-        targetName = terminal?.localizedName
-        guard let terminal, hasAccessibilityAccess else {
+        targetName = application?.localizedName
+        targetBundleIdentifier = application?.bundleIdentifier
+        guard let application, hasAccessibilityAccess else {
             target = nil
-            return
-        }
-        if let focused = readFocusedTarget(terminal) {
-            recordTerminalTarget(focused)
             return
         }
         // Keep a verified target across transient AX read failures. Paste revalidates it before sending keys.
-        if target?.pid != terminal.processIdentifier || target?.launchDate != terminal.launchDate {
+        if target?.pid != application.processIdentifier || target?.launchDate != application.launchDate {
             target = nil
         }
-        if target != nil { return }
         targetCapture = Task { [weak self] in
             defer {
                 if self?.targetCaptureID == captureID { self?.targetCapture = nil }
             }
-            for _ in 0..<12 {
-                do { try await Task.sleep(for: .milliseconds(35)) } catch { return }
+            let attempts = application.bundleIdentifier == PasteDestination.herdr.rawValue ? 3 : 13
+            for attempt in 0..<attempts {
+                if attempt > 0 {
+                    do { try await Task.sleep(for: .milliseconds(35)) } catch { return }
+                }
                 guard let self, !Task.isCancelled, self.targetCaptureID == captureID,
-                      self.previousApp?.processIdentifier == terminal.processIdentifier,
-                      self.previousApp?.launchDate == terminal.launchDate,
-                      self.compatibleTerminal(terminal) != nil, !terminal.isTerminated else { return }
-                if let focused = self.readFocusedTarget(terminal) {
-                    self.recordTerminalTarget(focused)
+                      self.previousApp?.processIdentifier == application.processIdentifier,
+                      self.previousApp?.launchDate == application.launchDate,
+                      self.compatibleApplication(application) != nil, !application.isTerminated else { return }
+                let focused = await self.readFocusedTarget(application)
+                guard !Task.isCancelled, self.targetCaptureID == captureID else { return }
+                if let focused {
+                    self.recordApplicationTarget(focused)
                     return
                 }
+                if self.target != nil { return }
             }
         }
     }
 
-    private func recordTerminalTarget(_ target: TerminalTarget) {
+    private func recordApplicationTarget(_ target: ApplicationTarget) {
         self.target = target
-        if case .error(let error, _) = state, let failure = error as? TerminalFailure,
+        if case .error(let error, _) = state, let failure = error as? PasteFailure,
            failure == .unavailable || failure == .focusChanged {
             state = result.isEmpty ? .idle : .preview
         }
@@ -797,7 +837,7 @@ final class InputController: ObservableObject {
     func refreshPermission() {
         let granted = accessibilityAccess()
         if granted != hasAccessibilityAccess { hasAccessibilityAccess = granted }
-        if granted, case .error(let error, _) = state, error as? TerminalFailure == .permission {
+        if granted, case .error(let error, _) = state, error as? PasteFailure == .permission {
             state = result.isEmpty ? .idle : .preview
         }
     }
@@ -967,14 +1007,14 @@ final class InputController: ObservableObject {
     private func pasteResult() {
         guard !busy, !result.isEmpty, !isConfirming else { return }
         refreshPermission()
-        guard hasAccessibilityAccess else { return showError(TerminalFailure.permission) }
-        if let target, let app = NSRunningApplication(processIdentifier: target.pid), compatibleTerminal(app) == nil {
+        guard hasAccessibilityAccess else { return showError(PasteFailure.permission) }
+        if let target, let app = NSRunningApplication(processIdentifier: target.pid), compatibleApplication(app) == nil {
             self.target = nil
         }
-        if target == nil { captureTerminalTarget(from: previousApp) }
+        if target == nil { captureApplicationTarget(from: previousApp) }
         guard let target else {
             guard let capture = targetCapture, let source = previousApp else {
-                return showError(TerminalFailure.unavailable)
+                return showError(PasteFailure.unavailable)
             }
             state = .pasting
             deliveryTask = Task { [weak self] in
@@ -988,12 +1028,12 @@ final class InputController: ObservableObject {
                 guard self.panel?.isKeyWindow == true,
                       self.previousApp?.processIdentifier == source.processIdentifier,
                       self.previousApp?.launchDate == source.launchDate else {
-                    self.showError(TerminalFailure.focusChanged)
+                    self.showError(PasteFailure.focusChanged)
                     return
                 }
                 self.state = .preview
                 guard self.target != nil else {
-                    self.showError(TerminalFailure.unavailable)
+                    self.showError(PasteFailure.unavailable)
                     return
                 }
                 self.pasteResult()
@@ -1002,7 +1042,7 @@ final class InputController: ObservableObject {
         }
 
         let pasteText = result.replacingOccurrences(of: "\r\n", with: "\n")
-        guard PasteService.allowsTerminalPaste(pasteText) else { return showError(TerminalFailure.controlCharacters) }
+        guard PasteService.allowsPaste(pasteText) else { return showError(PasteFailure.controlCharacters) }
         let delivery = Delivery(
             target: target, text: pasteText, autoSubmit: willSubmitPrompt
         )
@@ -1028,7 +1068,7 @@ final class InputController: ObservableObject {
         if pasteboard.setString(result, forType: .string) {
             state = .notice(LocalizedMessage("已复制译文。"))
         } else {
-            showError(TerminalFailure.clipboard)
+            showError(PasteFailure.clipboard)
         }
     }
 
@@ -1063,7 +1103,7 @@ final class InputController: ObservableObject {
     }
 
     private func deliver(_ delivery: Delivery) {
-        guard panel?.isKeyWindow == true else { return showError(TerminalFailure.focusChanged) }
+        guard panel?.isKeyWindow == true else { return showError(PasteFailure.focusChanged) }
         state = .pasting
         deliveryTask = Task { [weak self] in
             guard let self else { return }
@@ -1077,10 +1117,10 @@ final class InputController: ObservableObject {
                     willPostPaste: { self.state = .pastePosted }
                 )
                 if outcome == .enterSkipped {
-                    self.state = .notice(LocalizedMessage("已向终端发送粘贴按键。请检查内容后手动按 Enter。"))
+                    self.state = .notice(LocalizedMessage("已发送粘贴按键。请检查内容后手动按 Enter。"))
                     return
                 }
-                self.logger.debug("Posted terminal input events")
+                self.logger.debug("Posted application input events")
                 if self.settings.clearAfterPaste {
                     self.text = ""
                     self.result = ""

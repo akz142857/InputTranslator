@@ -5,12 +5,12 @@ import XCTest
 @testable import InputTranslator
 
 final class InputTranslatorTests: XCTestCase {
-    @MainActor private func terminalFocusFixture() throws -> (NSRunningApplication, TerminalTarget) {
+    @MainActor private func terminalFocusFixture() throws -> (NSRunningApplication, ApplicationTarget) {
         let terminal = (NSRunningApplication.runningApplications(withBundleIdentifier: "com.googlecode.iterm2")
             + NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.Terminal")).first
         guard let terminal else { throw XCTSkip("A running Terminal or iTerm2 is required for focus capture tests") }
         let element = AXUIElementCreateApplication(terminal.processIdentifier)
-        return (terminal, TerminalTarget(pid: terminal.processIdentifier, launchDate: terminal.launchDate,
+        return (terminal, ApplicationTarget(pid: terminal.processIdentifier, launchDate: terminal.launchDate,
                                          window: element, input: element))
     }
 
@@ -22,6 +22,7 @@ final class InputTranslatorTests: XCTestCase {
             return reads == 1 ? target : nil
         }, accessibilityAccess: { true })
         controller.activeApplicationChanged(to: terminal)
+        await waitForTarget(controller)
         XCTAssertEqual(controller.target, target)
         controller.activeApplicationChanged(to: terminal)
         XCTAssertEqual(controller.target, target)
@@ -33,7 +34,8 @@ final class InputTranslatorTests: XCTestCase {
     @MainActor func testTerminalFocusCaptureRetriesAndRejectsAnOutdatedCapture() async throws {
         let (terminal, target) = try terminalFocusFixture()
         var reads = 0
-        let controller = InputController(settings: try isolatedSettings(), readFocusedTarget: { _ in
+        let controller = InputController(settings: try isolatedSettings(), readFocusedTarget: { app in
+            guard app.processIdentifier == terminal.processIdentifier else { return nil }
             reads += 1
             return reads >= 3 ? target : nil
         }, accessibilityAccess: { true })
@@ -45,22 +47,29 @@ final class InputTranslatorTests: XCTestCase {
         XCTAssertEqual(controller.target, target)
         reads = 0
         controller.activeApplicationChanged(to: terminal)
+        await Task.yield()
         let finder = try XCTUnwrap(NSRunningApplication.runningApplications(withBundleIdentifier: "com.apple.finder").first)
         controller.activeApplicationChanged(to: finder)
         try await Task.sleep(for: .milliseconds(150))
         XCTAssertNil(controller.target)
-        XCTAssertNil(controller.targetName)
-        XCTAssertEqual(reads, 1)
+        XCTAssertEqual(controller.targetName, finder.localizedName)
     }
 
-    @MainActor func testChangingTerminalChoiceInvalidatesTheEarlierTarget() throws {
+    @MainActor private func waitForTarget(_ controller: InputController) async {
+        for _ in 0..<60 where controller.target == nil {
+            try? await Task.sleep(for: .milliseconds(10))
+        }
+    }
+
+    @MainActor func testChangingApplicationChoiceInvalidatesTheEarlierTarget() async throws {
         let (terminal, target) = try terminalFocusFixture()
         let settings = try isolatedSettings()
         let controller = InputController(settings: settings, readFocusedTarget: { _ in target },
                                          accessibilityAccess: { true })
         controller.activeApplicationChanged(to: terminal)
+        await waitForTarget(controller)
         XCTAssertEqual(controller.target, target)
-        settings.terminal = terminal.bundleIdentifier == "com.googlecode.iterm2" ? .terminal : .iTerm
+        controller.selectPasteDestination(terminal.bundleIdentifier == "com.googlecode.iterm2" ? .terminal : .iTerm)
         controller.text = "Check the patch."
         controller.requestPrimaryAction()
         XCTAssertNil(controller.target)
@@ -176,10 +185,10 @@ final class InputTranslatorTests: XCTestCase {
     @MainActor func testPasteConfirmationAndControlCharacters() {
         XCTAssertFalse(PasteService.requiresConfirmation(text: "Review"))
         XCTAssertTrue(PasteService.requiresConfirmation(text: "Review\nx"))
-        XCTAssertTrue(PasteService.allowsTerminalPaste("Review 👩‍💻\n\tsecond line"))
-        XCTAssertFalse(PasteService.allowsTerminalPaste("Review\u{1B}[201~"))
-        XCTAssertFalse(PasteService.allowsTerminalPaste("Review\r"))
-        XCTAssertFalse(PasteService.allowsTerminalPaste("Review\u{2028}"))
+        XCTAssertTrue(PasteService.allowsPaste("Review 👩‍💻\n\tsecond line"))
+        XCTAssertFalse(PasteService.allowsPaste("Review\u{1B}[201~"))
+        XCTAssertFalse(PasteService.allowsPaste("Review\r"))
+        XCTAssertFalse(PasteService.allowsPaste("Review\u{2028}"))
     }
 
     @MainActor func testClipboardSnapshotLimitAndDeclaredOwnership() throws {
@@ -196,9 +205,10 @@ final class InputTranslatorTests: XCTestCase {
     @MainActor func testSingleLineAutomaticSubmissionIsOptIn() throws {
         let settings = try isolatedSettings()
         let controller = InputController(settings: settings)
+        controller.selectPasteDestination(.terminal)
         controller.text = "Review the patch."
         XCTAssertFalse(controller.willSubmitPrompt)
-        settings.autoSubmit = true
+        settings.setAutomaticallySubmits(true, to: PasteDestination.terminal.rawValue)
         XCTAssertTrue(controller.willSubmitPrompt)
         XCTAssertFalse(PasteService.requiresConfirmation(text: controller.text))
         controller.text += "\nThen run the tests."
@@ -604,8 +614,8 @@ final class InputTranslatorTests: XCTestCase {
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
         defer { defaults.removePersistentDomain(forName: suite) }
         let settings = AppSettings(defaults: defaults, preferredLanguage: "fr-CA")
-        XCTAssertFalse(settings.autoSubmit)
-        XCTAssertEqual(settings.terminal, .lastActive)
+        XCTAssertFalse(settings.automaticallySubmits(to: PasteDestination.terminal.rawValue))
+        XCTAssertEqual(settings.pasteDestination, .currentApplication)
         XCTAssertTrue(settings.clearAfterPaste)
         XCTAssertTrue(settings.preserveClipboard)
         XCTAssertFalse(settings.panelPinned)
@@ -616,8 +626,8 @@ final class InputTranslatorTests: XCTestCase {
         XCTAssertEqual(settings.translationPair.source, TranslationLanguage("fr"))
         XCTAssertEqual(settings.translationPair.target, TranslationPair.english)
         XCTAssertNil(defaults.object(forKey: "translationLanguages"))
-        settings.autoSubmit = true
-        settings.terminal = .iTerm
+        settings.setAutomaticallySubmits(true, to: PasteDestination.iTerm.rawValue)
+        settings.pasteDestination = .iTerm
         settings.clearAfterPaste = false
         settings.preserveClipboard = false
         settings.panelPinned = true
@@ -627,8 +637,8 @@ final class InputTranslatorTests: XCTestCase {
         let hotkey = Hotkey(keyCode: 0, modifiers: 4096, keyLabel: "A")
         settings.saveHotkey(hotkey)
         let reloaded = AppSettings(defaults: defaults, preferredLanguage: "zh-HK")
-        XCTAssertTrue(reloaded.autoSubmit)
-        XCTAssertEqual(reloaded.terminal, .iTerm)
+        XCTAssertTrue(reloaded.automaticallySubmits(to: PasteDestination.iTerm.rawValue))
+        XCTAssertEqual(reloaded.pasteDestination, .iTerm)
         XCTAssertFalse(reloaded.clearAfterPaste)
         XCTAssertFalse(reloaded.preserveClipboard)
         XCTAssertTrue(reloaded.panelPinned)

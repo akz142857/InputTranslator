@@ -20,7 +20,7 @@ struct SettingsView: View {
         })) {
             Tab(L10n.text("通用"), systemImage: "gearshape", value: .general) { general }
             Tab(L10n.text("语言"), systemImage: "globe", value: .languages) { languages }
-            Tab(L10n.text("终端"), systemImage: "terminal", value: .terminal) { terminal }
+            Tab(L10n.text("输入"), systemImage: "keyboard.badge.ellipsis", value: .terminal) { terminal }
             Tab(L10n.text("助手接入"), systemImage: "link", value: .assistants) { assistants }
             Tab(L10n.text("快捷键"), systemImage: "keyboard", value: .shortcuts) { shortcuts }
         }
@@ -181,16 +181,16 @@ struct SettingsView: View {
             }
 
             Section {
-                LabeledContent(L10n.text("粘贴到终端")) {
+                LabeledContent(L10n.text("粘贴到其他应用")) {
                     Label(controller.hasAccessibilityAccess ? L10n.text("已授权") : L10n.text("未授权"),
                           systemImage: controller.hasAccessibilityAccess ? "checkmark.circle" : "exclamationmark.circle")
                         .foregroundStyle(.secondary)
                 }
-                Button(L10n.text("打开系统设置…"), action: TerminalManager.openAccessibilitySettings)
+                Button(L10n.text("打开系统设置…"), action: ApplicationTargetManager.openAccessibilitySettings)
             } header: {
                 Text(L10n.text("辅助功能"))
             } footer: {
-                Text(L10n.text("粘贴到终端需要辅助功能权限。"))
+                Text(L10n.text("粘贴到其他应用需要辅助功能权限。"))
             }
         }
         .formStyle(.grouped)
@@ -199,21 +199,35 @@ struct SettingsView: View {
     private var terminal: some View {
         Form {
             Section(L10n.text("粘贴")) {
-                Picker(L10n.text("目标终端"), selection: $settings.terminal) {
-                    ForEach(TerminalChoice.allCases) { choice in
+                Picker(L10n.text("目标应用"), selection: Binding(
+                    get: { settings.pasteDestination }, set: controller.selectPasteDestination
+                )) {
+                    ForEach(PasteDestination.choices(including: settings.pasteDestination)) { choice in
                         Text(choice.title).tag(choice)
                     }
                 }
+                .accessibilityIdentifier("paste-destination")
+                .disabled(controller.isDelivering)
                 Toggle(L10n.text("粘贴后清空输入"), isOn: $settings.clearAfterPaste)
                 Toggle(L10n.text("粘贴后恢复剪贴板"), isOn: $settings.preserveClipboard)
             }
 
             Section {
-                Toggle(L10n.text("粘贴后自动按 Enter"), isOn: $settings.autoSubmit)
+                if let name = controller.submissionApplicationName {
+                    Toggle(L10n.text("粘贴后自动按 Enter"), isOn: Binding(
+                        get: { controller.automaticallySubmitsToTarget }, set: controller.setAutomaticallySubmitsToTarget
+                    ))
+                    .accessibilityIdentifier("application-auto-submit")
+                    .disabled(controller.isDelivering)
+                    LabeledContent(L10n.text("仅用于此应用"), value: name)
+                } else {
+                    Text(L10n.text("先从目标应用打开翻译浮窗，再设置自动提交。"))
+                        .foregroundStyle(.secondary)
+                }
             } header: {
                 Text(L10n.text("提交"))
             } footer: {
-                Text(L10n.text("开启后，单行译文会在粘贴后立即提交。多行内容请手动提交。"))
+                Text(L10n.text("按应用分别记忆，新应用默认关闭。开启后，单行译文粘贴后会按 Enter；多行内容请手动提交。"))
             }
         }
         .formStyle(.grouped)

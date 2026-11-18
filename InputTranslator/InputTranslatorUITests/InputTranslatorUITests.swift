@@ -241,7 +241,7 @@ final class InputTranslatorUITests: XCTestCase {
         let offeredAuthorization = authorization.exists
         let paste = panel.buttons["paste-to-terminal"].firstMatch
         let status = panel.staticTexts["translation-status"].firstMatch
-        XCTAssertTrue(paste.label.contains("Paste & Submit"))
+        XCTAssertTrue(paste.label.contains("Paste"))
         paste.click()
         XCTAssertTrue(status.waitForExistence(timeout: 3))
         XCTAssertEqual(authorization.exists, offeredAuthorization)

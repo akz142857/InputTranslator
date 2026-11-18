@@ -3,7 +3,7 @@ import ServiceManagement
 import SwiftUI
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, NSMenuItemValidation {
     private let controller = InputController()
     private var updater: AppUpdater { controller.updater }
     private lazy var hotkeys = HotkeyManager { [weak self] in self?.controller.toggleComposer() }
@@ -142,15 +142,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         menu.addItem(.separator())
 
         let autoSubmit = add(L10n.text("粘贴后按 Enter"), #selector(toggleAutoSubmit), to: menu)
-        autoSubmit.state = controller.settings.autoSubmit ? .on : .off
+        autoSubmit.state = controller.automaticallySubmitsToTarget ? .on : .off
+        autoSubmit.isEnabled = controller.submissionBundleIdentifier != nil
+        if let name = controller.submissionApplicationName { autoSubmit.title += " · " + name }
 
         let terminals = NSMenu()
-        for choice in TerminalChoice.allCases {
+        for choice in PasteDestination.choices(including: controller.settings.pasteDestination) {
             let item = add(choice.title, #selector(selectTerminal(_:)), to: terminals)
             item.representedObject = choice.rawValue
-            item.state = choice == controller.settings.terminal ? .on : .off
+            item.state = choice == controller.settings.pasteDestination ? .on : .off
+            item.isEnabled = !controller.isDelivering
         }
-        add(L10n.text("目标终端"), nil, to: menu).submenu = terminals
+        add(L10n.text("目标应用"), nil, to: menu).submenu = terminals
 
         menu.addItem(.separator())
         add(L10n.text("终端助手接入…"), #selector(openAssistantConnections), to: menu)
@@ -206,12 +209,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func toggleAutoSubmit() {
-        controller.settings.autoSubmit.toggle()
+        controller.setAutomaticallySubmitsToTarget(!controller.automaticallySubmitsToTarget)
+    }
+
+    func validateMenuItem(_ menuItem: NSMenuItem) -> Bool {
+        if menuItem.action == #selector(toggleAutoSubmit) {
+            return controller.submissionBundleIdentifier != nil && !controller.isDelivering
+        }
+        if menuItem.action == #selector(selectTerminal(_:)) { return !controller.isDelivering }
+        return true
     }
 
     @objc private func selectTerminal(_ sender: NSMenuItem) {
-        guard let value = sender.representedObject as? String, let choice = TerminalChoice(rawValue: value) else { return }
-        controller.settings.terminal = choice
+        guard let value = sender.representedObject as? String else { return }
+        controller.selectPasteDestination(PasteDestination(rawValue: value))
     }
 
     @objc private func toggleLogin() {

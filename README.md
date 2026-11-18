@@ -2,7 +2,7 @@
 
 [简体中文](README.zh-CN.md)
 
-InputTranslator is a menu bar app for writing prompts and reading AI assistant replies in your preferred language. It uses Apple Translation to translate on your Mac. Paste translated prompts into Terminal or iTerm2, then read replies from Claude Code, Codex CLI, or Gemini CLI in the reverse language direction.
+InputTranslator is a menu bar app for writing prompts and reading AI assistant replies in your preferred language. It uses Apple Translation to translate on your Mac. Paste translations back into the app you were using, including supported terminal, editor, and browser text inputs. In Terminal and iTerm2, read replies from Claude Code, Codex CLI, or Gemini CLI in the reverse language direction.
 
 Requires **macOS 15 or later**. One universal build supports Apple silicon and Intel Macs. The floating panel uses native Liquid Glass controls on macOS 26 and later.
 
@@ -22,16 +22,18 @@ See [Publishing an app update](RELEASING.md) for the release workflow.
 
 | Action | Setup |
 | --- | --- |
-| Paste into Terminal or iTerm2 | Enable InputTranslator in **System Settings → Privacy & Security → Accessibility**. This may appear as **Device Control and Data Access**. If the app is missing from the list, add the copy in **Applications**. Translation and copying work without this permission. |
+| Paste into another app | Enable InputTranslator in **System Settings → Privacy & Security → Accessibility**. This may appear as **Device Control and Data Access**. If the app is missing from the list, add the copy in **Applications**. Translation and copying work without this permission. |
 | Read replies from the current terminal session | Connect your assistant in **Settings → Assistants**. On the first read, allow InputTranslator to control Terminal or iTerm2 in the macOS prompt. Check this under **System Settings → Privacy & Security → Automation**. |
 
 ## Write a prompt
 
-With your terminal input focused, press **⌘⌥Space** to open the prompt panel. After you pause typing, the translated preview appears below the editor. If you use an input method, translation starts after you commit the composed text.
+With the destination input focused, press **⌘⌥Space** to open the prompt panel. After you pause typing, the translated preview appears below the editor. If you use an input method, translation starts after you commit the composed text.
 
-Press **⌘↵** or click **Paste to Terminal** to paste a single-line translation. If translation is running, the shortcut waits for the result. For multiple lines, press **⌘↵** again to confirm the paste. You can also copy the translation and paste it yourself.
+Press **⌘↵** or click **Paste to [app name]** to paste a single-line translation. If translation is running, the shortcut waits for the result. For multiple lines, press **⌘↵** again to confirm the paste. You can also copy the translation and paste it yourself.
 
-**Automatically press Enter after pasting** is off by default. In **Settings → Terminal**, you can enable it for single-line prompts. Submit multiline prompts manually. If the app loses the terminal focus or permission, your draft and translation stay in the panel.
+**Settings → Input → Target App** defaults to **Current App**. You can also select a fixed app; open the panel from that app before pasting. Standard accessible text fields and text areas are supported. Herdr uses its read-only `status` and `ls` interfaces to check the original terminal pane, since its canvas does not expose a standard text field. A changed window or pane stops delivery and preserves the translation. If an app cannot expose a usable input target, copy the translation and paste it manually. Password fields are excluded.
+
+**Automatically press Enter after pasting** is saved separately for each app and is off for new apps. Configure it in **Settings → Input**, or in the menu bar for the current target. Existing Terminal/iTerm2 preferences are preserved. Submit multiline prompts manually. If focus or permission changes, your draft and translation stay in the panel. Automatic reply reading remains available only in Terminal and iTerm2; use **Read Clipboard** for replies from Herdr and other apps.
 
 ## Read an assistant reply
 
@@ -81,11 +83,11 @@ xcodebuild -project InputTranslator/InputTranslator.xcodeproj \
   CODE_SIGN_IDENTITY=- CODE_SIGNING_REQUIRED=NO test
 ```
 
-Verify both Terminal and iTerm2 with a running assistant. Check live previews, preservation of inline code and fenced blocks, and single-line and multiline paste. Test default paste behavior and opt-in submission. Check how the app handles changes to the focused tab, split pane, app, and clipboard. Once the translation languages are installed, test offline translation as well.
+Verify Terminal and iTerm2 with a running assistant, Herdr with multiple panes, and standard native and browser text inputs. Check live previews, preservation of inline code and fenced blocks, and single-line and multiline paste. Test per-app default paste behavior and opt-in submission. Check how the app handles changes to the focused window, tab, split pane, app, and clipboard. Once the translation languages are installed, test offline translation as well.
 
 ## Troubleshooting and limits
 
-- macOS Accessibility exposes the focused terminal window and input element. It cannot confirm that the assistant received the paste keystroke. Verify this in your own terminal session before enabling automatic submission.
+- macOS Accessibility checks the original window and input element. Herdr additionally uses its read-only CLI to check the original pane. Sending a paste keystroke does not confirm receipt by the target app. Verify pasting in each app before enabling automatic submission.
 - A terminal can show its own confirmation for multiline paste. Inspect the terminal if the text does not appear. You can always copy the translation and paste it manually.
 - Clipboard preservation supports up to 64 MiB per paste operation. For larger clipboards, use **Copy Translation** and paste manually.
 - Use backticks around paths, variable names, and commands you want to keep intact. If Apple Translation changes a code placeholder, the app translates the surrounding text in segments.
