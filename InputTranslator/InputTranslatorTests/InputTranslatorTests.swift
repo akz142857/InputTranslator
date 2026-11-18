@@ -191,6 +191,96 @@ final class InputTranslatorTests: XCTestCase {
         XCTAssertEqual(controller.text, "你好，请列出文件。")
     }
 
+    @MainActor func testInstalledTranslationSurvivesRepeatedReplacementAndCancellation() async throws {
+        let pair = TranslationPair.chineseToEnglish
+        let status = await LanguageAvailability().status(from: pair.source.localeLanguage,
+                                                         to: pair.target.localeLanguage)
+        try XCTSkipUnless(status == .installed, "Chinese and English system translation models are required")
+
+        let settings = try isolatedSettings()
+        settings.topDockEnabled = false
+        let controller = InputController(settings: settings)
+        controller.showComposer()
+        defer { controller.dismissPanel() }
+        let prompts = [
+            "使用 harness2 的经验检查修改的了什么？",
+            "请检查数据库结构。",
+            "请列出这次修改的文件。",
+            "请解释这个函数的作用。"
+        ]
+        for round in 0..<12 {
+            controller.text = String(repeating: "请检查数据库结构和代码中的问题。", count: 100)
+            for _ in 0..<40 where controller.requestID == nil {
+                try await Task.sleep(for: .milliseconds(20))
+            }
+            XCTAssertNotNil(controller.requestID, "Round \(round) did not start")
+            if round.isMultiple(of: 2) { controller.cancel() }
+            controller.updateComposition(true)
+            controller.text = ""
+            controller.text = prompts[round % prompts.count]
+            controller.updateComposition(false)
+            if round.isMultiple(of: 3) {
+                controller.dismissPanel()
+                controller.showComposer()
+            }
+            await waitForResult(controller)
+            try XCTUnwrap(controller.result.isEmpty ? nil : controller.result,
+                          "Round \(round) stalled: \(controller.message ?? "no status")")
+            XCTAssertFalse(controller.busy)
+            XCTAssertFalse(controller.result.unicodeScalars.contains { $0.properties.isIdeographic })
+            XCTAssertEqual(controller.text, prompts[round % prompts.count])
+        }
+    }
+
+    @MainActor func testUnresponsiveTranslationRestartsOnceAndAcceptsAnotherRequest() async throws {
+        let pair = TranslationPair.chineseToEnglish
+        let status = await LanguageAvailability().status(from: pair.source.localeLanguage,
+                                                         to: pair.target.localeLanguage)
+        try XCTSkipUnless(status == .installed, "Chinese and English system translation models are required")
+
+        // With no panel, the session callback never starts. Exercise the actual watchdog.
+        let controller = InputController(settings: try isolatedSettings(),
+                                         translationResponseTimeout: .milliseconds(200))
+        controller.text = "请检查数据库结构。"
+        controller.requestPrimaryAction()
+        defer { controller.cancel() }
+        for _ in 0..<100 where controller.sessionRequest == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let first = try XCTUnwrap(controller.sessionRequest)
+        for _ in 0..<100 where controller.sessionRequest?.id == first.id {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let retry = try XCTUnwrap(controller.sessionRequest)
+        XCTAssertNotEqual(retry.id, first.id)
+        XCTAssertEqual(retry.requestID, first.requestID)
+        if #available(macOS 26, *) {
+            let staleSession = TranslationSession(installedSource: pair.source.localeLanguage,
+                                                  target: pair.target.localeLanguage)
+            await controller.useTranslationSession(staleSession, for: first)
+            XCTAssertEqual(controller.sessionRequest?.id, retry.id)
+            XCTAssertTrue(controller.result.isEmpty)
+        }
+        await waitForResult(controller)
+        XCTAssertTrue(controller.showsError)
+        XCTAssertFalse(controller.busy)
+        XCTAssertNil(controller.requestID)
+        XCTAssertNil(controller.sessionRequest)
+        XCTAssertEqual(controller.text, "请检查数据库结构。")
+
+        controller.text = "请解释这个函数。"
+        controller.requestPrimaryAction()
+        for _ in 0..<100 where controller.sessionRequest == nil {
+            try await Task.sleep(for: .milliseconds(10))
+        }
+        let next = try XCTUnwrap(controller.sessionRequest)
+        XCTAssertNotEqual(next.requestID, first.requestID)
+        controller.cancel()
+        XCTAssertNil(controller.requestID)
+        XCTAssertNil(controller.sessionRequest)
+        XCTAssertFalse(controller.busy)
+    }
+
     @MainActor func testVisibleReplyAutomaticallyTranslatesTwoCompletedTurns() async throws {
         let settings = try isolatedSettings()
         let reverse = settings.translationPair.reverse

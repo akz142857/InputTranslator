@@ -16,6 +16,13 @@ final class InputController: ObservableObject {
         let input: Input
         let pair: TranslationPair
         var availability: LanguageAvailability.Status?
+        var hasRetried = false
+    }
+
+    struct SessionRequest: Identifiable {
+        let id = UUID()
+        let requestID: UUID
+        let configuration: TranslationSession.Configuration
     }
 
     private struct Draft {
@@ -90,7 +97,7 @@ final class InputController: ObservableObject {
     @Published private(set) var replyOrigin: ReplyOrigin?
     @Published private(set) var targetName: String?
     @Published private(set) var hasAccessibilityAccess = false
-    @Published private(set) var configuration: TranslationSession.Configuration?
+    @Published private(set) var sessionRequest: SessionRequest?
     var requestID: UUID? { request?.id }
 
     @Published private var state = State.idle
@@ -114,6 +121,8 @@ final class InputController: ObservableObject {
     private var liveReplyPending = false
     private var performActionWhenReady = false
     private var timeout: Task<Void, Never>?
+    private var activeSession: TranslationSession?
+    private let translationResponseTimeout: Duration
     private var languageCheck: Task<Void, Never>?
     private var deliveryTask: Task<Void, Never>?
 
@@ -123,7 +132,8 @@ final class InputController: ObservableObject {
         hookInstaller: @escaping (TerminalAssistant) -> TerminalHookInstaller = { TerminalHookInstaller($0) },
         readTerminalReply: @escaping @MainActor (NSRunningApplication?) async throws -> TerminalReply = {
             try await TerminalReplyReader.latest(in: $0)
-        }
+        },
+        translationResponseTimeout: Duration = .seconds(15)
     ) {
         self.pasteboard = pasteboard
         let activeSettings = settings ?? AppSettings()
@@ -132,6 +142,7 @@ final class InputController: ObservableObject {
         supportedLanguages = Array(Set([pair.source, pair.target]))
         self.hookInstaller = hookInstaller
         self.readTerminalReply = readTerminalReply
+        self.translationResponseTimeout = translationResponseTimeout
     }
 
     var busy: Bool {
@@ -827,18 +838,41 @@ final class InputController: ObservableObject {
                 return
             }
             self.request?.availability = availability
-            if self.configuration?.source == source && self.configuration?.target == target {
-                self.configuration?.invalidate()
-            } else {
-                self.configuration = TranslationSession.Configuration(source: source, target: target)
-            }
+            self.startTranslationSession()
         }
+        scheduleTranslationTimeout(after: .seconds(180), requestID: request.id)
+    }
+
+    private func startTranslationSession() {
+        guard let request, let availability = request.availability else { return }
+        if #available(macOS 26, *) { activeSession?.cancel() }
+        activeSession = nil
+        sessionRequest = SessionRequest(
+            requestID: request.id,
+            configuration: TranslationSession.Configuration(
+                source: request.pair.source.localeLanguage, target: request.pair.target.localeLanguage
+            )
+        )
+        scheduleTranslationTimeout(
+            after: availability == .installed ? translationResponseTimeout : .seconds(180),
+            requestID: request.id
+        )
+    }
+
+    private func scheduleTranslationTimeout(after duration: Duration, requestID: UUID) {
+        timeout?.cancel()
         timeout = Task { [weak self] in
             do {
-                try await Task.sleep(for: .seconds(180))
-                guard let self, self.requestID == request.id else { return }
+                try await Task.sleep(for: duration)
+                guard let self, let request = self.request, request.id == requestID else { return }
+                if request.availability == .installed, !request.hasRetried {
+                    self.request?.hasRetried = true
+                    self.logger.warning("Translation session stopped responding; restarting once")
+                    self.startTranslationSession()
+                    return
+                }
                 self.clearPendingTranslation()
-                self.showError(TranslationFailure.timeout)
+                self.showError(request.availability == .installed ? TranslationFailure.service : TranslationFailure.timeout)
             } catch is CancellationError {
                 return
             } catch {
@@ -847,11 +881,13 @@ final class InputController: ObservableObject {
         }
     }
 
-    func useTranslationSession(_ session: TranslationSession, requestID: UUID?) async {
-        guard let request, request.id == requestID,
+    func useTranslationSession(_ session: TranslationSession, for sessionRequest: SessionRequest) async {
+        guard let request, request.id == sessionRequest.requestID,
+              self.sessionRequest?.id == sessionRequest.id,
               let availability = request.availability, !Task.isCancelled,
               session.sourceLanguage?.minimalIdentifier == request.pair.source.id,
               session.targetLanguage?.minimalIdentifier == request.pair.target.id else { return }
+        activeSession = session
 
         do {
             let translated: String
@@ -861,11 +897,11 @@ final class InputController: ObservableObject {
             case .reply(let document, let ranges):
                 translated = try await TranslationService.translateReply(document, at: ranges, with: session)
             }
-            guard self.requestID == request.id else { return }
+            guard self.requestID == request.id, self.sessionRequest?.id == sessionRequest.id else { return }
             finishTranslation()
             completeTranslation(with: translated)
         } catch {
-            guard self.requestID == request.id else { return }
+            guard self.requestID == request.id, self.sessionRequest?.id == sessionRequest.id else { return }
             finishTranslation()
             performActionWhenReady = false
             if let failure = error as? TranslationFailure {
@@ -933,12 +969,14 @@ final class InputController: ObservableObject {
         performActionWhenReady = false
         if request != nil {
             finishTranslation()
-            configuration = nil
         }
     }
 
     private func finishTranslation() {
         request = nil
+        sessionRequest = nil
+        if #available(macOS 26, *) { activeSession?.cancel() }
+        activeSession = nil
         languageCheck?.cancel()
         languageCheck = nil
         timeout?.cancel()

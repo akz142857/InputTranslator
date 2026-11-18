@@ -11,7 +11,6 @@ struct ContentView: View {
     private var showingReply: Bool { !controller.text.isEmpty || controller.showsSource }
 
     var body: some View {
-        let requestID = controller.requestID
         VStack(spacing: 10) {
             navigation
                 .padding(.horizontal, 20)
@@ -32,8 +31,14 @@ struct ContentView: View {
         .padding(.bottom, 12)
         .environment(\.locale, L10n.locale)
         .environment(\.layoutDirection, settings.interfaceLanguage.resolved == .arabic ? .rightToLeft : .leftToRight)
-        .translationTask(controller.configuration) { session in
-            await controller.useTranslationSession(session, requestID: requestID)
+        .background {
+            if let request = controller.sessionRequest {
+                Color.clear
+                    .translationTask(request.configuration) { session in
+                        await controller.useTranslationSession(session, for: request)
+                    }
+                    .id(request.id)
+            }
         }
     }
 
