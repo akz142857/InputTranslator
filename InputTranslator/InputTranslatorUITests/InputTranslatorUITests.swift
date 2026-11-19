@@ -419,6 +419,81 @@ final class InputTranslatorUITests: XCTestCase {
     }
 
     @MainActor
+    func testToolbarLanguageSwapFollowsModeAndKeepsWindowDraggable() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-panelPinned", "NO", "-topDockEnabled", "YES", "-topDockPanelDetached", "NO",
+                               "-keepDockedPanelBesideLauncher", "YES", "-interfaceLanguage", "zh-Hans",
+                               "-translationLanguages", "(zh, en)", "-SUEnableAutomaticChecks", "NO"]
+        app.launch()
+        defer { app.terminate() }
+        let panel = openComposer(in: app)
+        let swap = panel.buttons["language-swap"].firstMatch
+        XCTAssertTrue(swap.waitForExistence(timeout: 5))
+        XCTAssertTrue(swap.isHittable)
+        XCTAssertEqual(swap.value as? String, "简体中文 → 英语")
+        let frame = panel.frame
+        let editor = panel.textViews.firstMatch
+        editor.click()
+        editor.typeText("123")
+        swap.click()
+        XCTAssertTrue(swap.waitForExistence(timeout: 3))
+        XCTAssertEqual(swap.value as? String, "英语 → 简体中文")
+        XCTAssertEqual(editor.value as? String, "123")
+        XCTAssertEqual(panel.frame, frame)
+
+        panel.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "读回复")).firstMatch.click()
+        XCTAssertEqual(swap.value as? String, "简体中文 → 英语")
+        swap.click()
+        XCTAssertEqual(swap.value as? String, "英语 → 简体中文")
+        panel.descendants(matching: .any).matching(NSPredicate(format: "label == %@", "写提示词")).firstMatch.click()
+        XCTAssertEqual(swap.value as? String, "简体中文 → 英语")
+        XCTAssertEqual(editor.value as? String, "123")
+
+        let grip = panel.descendants(matching: .any)["top-dock-drag-handle"].firstMatch
+        XCTAssertTrue(grip.exists)
+        XCTAssertGreaterThanOrEqual(grip.frame.width, 8)
+        XCTAssertLessThanOrEqual(grip.frame.maxX, swap.frame.minX)
+        let center = grip.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        center.click(forDuration: 0.1, thenDragTo: center.withOffset(CGVector(dx: 100, dy: 90)))
+        XCTAssertEqual(panel.buttons["top-dock-placement"].label, "停靠到顶部")
+        XCTAssertNotEqual(panel.frame.origin, frame.origin)
+        let screenshot = XCTAttachment(screenshot: panel.screenshot())
+        screenshot.name = "language-swap-chinese"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
+    @MainActor
+    func testToolbarLanguageSwapFitsNarrowEnglishWindow() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-panelPinned", "NO", "-topDockEnabled", "YES", "-topDockPanelDetached", "NO",
+                               "-keepDockedPanelBesideLauncher", "YES", "-interfaceLanguage", "en",
+                               "-translationLanguages", "(zh, en)", "-SUEnableAutomaticChecks", "NO"]
+        app.launch()
+        defer { app.terminate() }
+        let panel = openComposer(in: app)
+        let corner = panel.coordinate(withNormalizedOffset: CGVector(dx: 1, dy: 1))
+            .withOffset(CGVector(dx: -2, dy: -2))
+        corner.click(forDuration: 0.1, thenDragTo: corner.withOffset(CGVector(dx: 520 - panel.frame.width, dy: 0)))
+        let swap = panel.buttons["language-swap"].firstMatch
+        XCTAssertTrue(swap.isHittable)
+        let tabs = panel.tabGroups["translation-mode-tabs"].firstMatch
+        XCTAssertLessThanOrEqual(tabs.frame.maxX, swap.frame.minX)
+        let controls = panel.buttons["top-dock-collapse"].firstMatch
+        XCTAssertLessThanOrEqual(swap.frame.maxX, controls.frame.minX)
+        XCTAssertGreaterThanOrEqual(swap.frame.minX, panel.frame.minX)
+        XCTAssertLessThanOrEqual(swap.frame.maxX, panel.frame.maxX)
+        let frame = panel.frame
+        swap.click()
+        XCTAssertEqual(swap.value as? String, "English → Simplified Chinese")
+        XCTAssertEqual(panel.frame, frame)
+        let screenshot = XCTAttachment(screenshot: panel.screenshot())
+        screenshot.name = "language-swap-english-narrow"
+        screenshot.lifetime = .keepAlways
+        add(screenshot)
+    }
+
+    @MainActor
     func testLaunchPerformance() throws {
         // This measures how long it takes to launch your application.
         measure(metrics: [XCTApplicationLaunchMetric()]) {

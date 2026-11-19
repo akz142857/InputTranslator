@@ -43,37 +43,82 @@ struct ContentView: View {
     }
 
     private var navigation: some View {
-        ZStack {
-            if settings.topDockEnabled {
-                PanelDragHandle()
-                    .frame(width: 44, height: 26)
-                    .overlay {
-                        Capsule().fill(.secondary.opacity(0.45))
-                            .frame(width: 24, height: 3)
-                            .allowsHitTesting(false)
-                    }
-                    .help(L10n.text("拖动浮窗；拖回屏幕顶部可重新停靠"))
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel(L10n.text("拖动浮窗"))
-                    .accessibilityIdentifier("top-dock-drag-handle")
-            }
-
-            HStack(spacing: 8) {
-                TranslationTabs(
-                    selection: controller.mode,
-                    options: [(.compose, L10n.text("写提示词")), (.readReply, L10n.text("读回复"))],
-                    accessibilityID: "translation-mode-tabs",
-                    accessibilityTitle: L10n.text("翻译模式"),
-                    isEnabled: controller.canSwitchMode,
-                    onSelect: selectMode
-                )
+        HStack(spacing: 6) {
+            TranslationTabs(
+                selection: controller.mode,
+                options: [(.compose, L10n.text("写提示词")), (.readReply, L10n.text("读回复"))],
+                accessibilityID: "translation-mode-tabs",
+                accessibilityTitle: L10n.text("翻译模式"),
+                isEnabled: controller.canSwitchMode,
+                onSelect: selectMode
+            )
+            .fixedSize()
+            toolbarDragArea
+            languageSwapButton
+                .layoutPriority(1)
+            Spacer(minLength: 8)
+            UpdateAvailableButton(updater: controller.updater)
+            windowControls
                 .fixedSize()
-                Spacer(minLength: 0)
-                UpdateAvailableButton(updater: controller.updater)
-                windowControls
-            }
         }
         .frame(minHeight: 30)
+    }
+
+    private var toolbarDragArea: some View {
+        Spacer(minLength: 8)
+            .overlay {
+                if settings.topDockEnabled {
+                    PanelDragHandle()
+                        .frame(height: 26)
+                        .help(L10n.text("拖动浮窗；拖回屏幕顶部可重新停靠"))
+                        .accessibilityElement(children: .ignore)
+                        .accessibilityLabel(L10n.text("拖动浮窗"))
+                        .accessibilityIdentifier("top-dock-drag-handle")
+                }
+            }
+    }
+
+    private var languageSwapButton: some View {
+        let pair = controller.languagePair
+        return Button(action: controller.swapLanguages) {
+            ViewThatFits(in: .horizontal) {
+                languagePairLabel(source: pair.source.name, target: pair.target.name)
+                languagePairLabel(source: shortLanguageName(pair.source, other: pair.target),
+                                  target: shortLanguageName(pair.target, other: pair.source))
+                languagePairLabel(source: pair.source.id.uppercased(), target: pair.target.id.uppercased())
+                Image(systemName: "arrow.left.arrow.right")
+                    .fixedSize()
+            }
+            .font(.system(size: 12, weight: .medium))
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.borderless)
+        .foregroundStyle(.primary)
+        .modifier(WindowControlMaterial())
+        .help(L10n.text("交换语言") + " · " + pair.label)
+        .accessibilityLabel(L10n.text("交换语言"))
+        .accessibilityValue(pair.label)
+        .accessibilityIdentifier("language-swap")
+        .disabled(!controller.canSwitchMode || pair.source == pair.target)
+    }
+
+    private func languagePairLabel(source: String, target: String) -> some View {
+        HStack(spacing: 5) {
+            Text(source)
+            Image(systemName: "arrow.left.arrow.right")
+                .font(.system(size: 10, weight: .medium))
+                .foregroundStyle(.secondary)
+            Text(target)
+        }
+        .fixedSize()
+    }
+
+    private func shortLanguageName(_ language: TranslationLanguage, other: TranslationLanguage) -> String {
+        guard let code = language.localeLanguage.languageCode?.identifier,
+              code != other.localeLanguage.languageCode?.identifier else { return language.name }
+        return L10n.locale.localizedString(forLanguageCode: code) ?? language.name
     }
 
     private func selectMode(_ mode: TranslationMode) {

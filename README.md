@@ -29,6 +29,8 @@ See [Publishing an app update](RELEASING.md) for the release workflow.
 
 With the destination input focused, press **⌘⌥Space** to open the prompt panel. After you pause typing, the translated preview appears below the editor. If you use an input method, translation starts after you commit the composed text.
 
+The language button beside **Write Prompt / Read Reply** shows the current mode's translation direction. Click it to swap the languages while keeping your input. The language choice is remembered when you reopen the app. With Top Dock enabled, drag the blank toolbar area to move or detach the panel.
+
 Press **⌘↵** or click **Paste to [app name]** to paste a single-line translation. If translation is running, the shortcut waits for the result. For multiple lines, press **⌘↵** again to confirm the paste. You can also copy the translation and paste it yourself.
 
 **Settings → Input → Target App** defaults to **Current App**. You can also select a fixed app; open the panel from that app before pasting. Standard accessible text fields and text areas are supported. Herdr uses its read-only `status` and `ls` interfaces to check the original terminal pane, since its canvas does not expose a standard text field. A changed window or pane stops delivery and preserves the translation. If an app cannot expose a usable input target, copy the translation and paste it manually. Password fields are excluded.
