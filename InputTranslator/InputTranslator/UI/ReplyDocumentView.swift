@@ -21,7 +21,7 @@ struct ReplyDocumentView: View {
                         ForEach(sections.indices, id: \.self) { index in
                             let section = sections[index]
                             if section.table != nil {
-                                table(section.blocks)
+                                ReplyTableView(blocks: section.blocks)
                             } else if let block = section.blocks.first {
                                 render(block, after: index == 0 ? nil : sections[index - 1].blocks.last)
                             }
@@ -138,48 +138,4 @@ struct ReplyDocumentView: View {
         }
     }
 
-    private func table(_ blocks: [ReplyMarkdown.Block]) -> some View {
-        let columns = blocks.first?.path.compactMap { part -> [PresentationIntent.TableColumn]? in
-            if case .table(let columns) = part.kind { return columns }
-            return nil
-        }.first ?? []
-        let emptyRow = Array(repeating: AttributedString(), count: columns.count)
-        var rows: [[AttributedString]] = []
-        for block in blocks {
-            guard case .tableCell(let column) = block.path.first?.kind, columns.indices.contains(column),
-                  let row = block.path.lazy.compactMap({ part -> Int? in
-                      switch part.kind {
-                      case .tableHeaderRow: 0
-                      case .tableRow(let index): index
-                      default: nil
-                      }
-                  }).first else { continue }
-            while rows.count <= row { rows.append(emptyRow) }
-            rows[row][column] = block.text
-        }
-        return ScrollView(.horizontal) {
-            Grid(alignment: .leading, horizontalSpacing: 0, verticalSpacing: 0) {
-                ForEach(rows.indices, id: \.self) { row in
-                    GridRow(alignment: .top) {
-                        ForEach(rows[row].indices, id: \.self) { column in
-                            let alignment: Alignment = switch columns[column].alignment {
-                            case .center: .center
-                            case .right: .trailing
-                            default: .leading
-                            }
-                            Text(rows[row][column])
-                                .font(.system(size: 13, weight: row == 0 ? .semibold : .regular))
-                                .fixedSize(horizontal: false, vertical: true)
-                                .frame(minWidth: 70, maxWidth: 260, alignment: alignment)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 7)
-                        }
-                    }
-                    .background(.secondary.opacity(row == 0 ? 0.16 : (row.isMultiple(of: 2) ? 0.08 : 0.04)))
-                }
-            }
-            .clipShape(.rect(cornerRadius: 8))
-        }
-        .accessibilityIdentifier("reply-table")
-    }
 }
