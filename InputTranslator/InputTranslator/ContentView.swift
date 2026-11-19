@@ -14,6 +14,11 @@ struct ContentView: View {
         VStack(spacing: 10) {
             navigation
                 .padding(.horizontal, 20)
+                .padding(.top, 6)
+                .background {
+                    PanelDragHandle(showsDragCursor: false)
+                        .accessibilityHidden(true)
+                }
 
             Divider()
 
@@ -27,7 +32,6 @@ struct ContentView: View {
             }
             .padding(.horizontal, 20)
         }
-        .padding(.top, 6)
         .padding(.bottom, 12)
         .environment(\.locale, L10n.locale)
         .environment(\.layoutDirection, settings.interfaceLanguage.resolved == .arabic ? .rightToLeft : .leftToRight)
@@ -54,10 +58,9 @@ struct ContentView: View {
             )
             .fixedSize()
             toolbarDragArea
+            UpdateAvailableButton(updater: controller.updater)
             languageSwapButton
                 .layoutPriority(1)
-            Spacer(minLength: 8)
-            UpdateAvailableButton(updater: controller.updater)
             windowControls
                 .fixedSize()
         }
@@ -67,14 +70,12 @@ struct ContentView: View {
     private var toolbarDragArea: some View {
         Spacer(minLength: 8)
             .overlay {
-                if settings.topDockEnabled {
-                    PanelDragHandle()
-                        .frame(height: 26)
-                        .help(L10n.text("拖动浮窗；拖回屏幕顶部可重新停靠"))
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel(L10n.text("拖动浮窗"))
-                        .accessibilityIdentifier("top-dock-drag-handle")
-                }
+                PanelDragHandle()
+                    .frame(height: 26)
+                    .help(L10n.text("拖动浮窗；拖回屏幕顶部可重新停靠"))
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(L10n.text("拖动浮窗"))
+                    .accessibilityIdentifier("top-dock-drag-handle")
             }
     }
 
@@ -95,7 +96,6 @@ struct ContentView: View {
             .contentShape(Capsule())
         }
         .buttonStyle(.borderless)
-        .foregroundStyle(.primary)
         .modifier(WindowControlMaterial())
         .help(L10n.text("交换语言") + " · " + pair.label)
         .accessibilityLabel(L10n.text("交换语言"))
@@ -107,10 +107,12 @@ struct ContentView: View {
     private func languagePairLabel(source: String, target: String) -> some View {
         HStack(spacing: 5) {
             Text(source)
+                .foregroundStyle(.primary)
             Image(systemName: "arrow.left.arrow.right")
                 .font(.system(size: 10, weight: .medium))
                 .foregroundStyle(.secondary)
             Text(target)
+                .foregroundStyle(.secondary)
         }
         .fixedSize()
     }

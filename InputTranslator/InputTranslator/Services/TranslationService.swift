@@ -102,6 +102,44 @@ enum TranslationFailure: LocalizedError {
     }
 }
 
+// Keep the user's separators and indentation, replacing only nonempty line contents.
+// Apply this before restoring code, so code whitespace remains byte-for-byte intact.
+nonisolated struct PromptLineLayout {
+    let source: String
+    let bodies: [Substring]
+
+    init(_ source: String) {
+        self.source = source
+        bodies = source.split(omittingEmptySubsequences: false, whereSeparator: \.isNewline).compactMap { line in
+            guard let start = line.firstIndex(where: { !$0.isWhitespace }),
+                  let end = line.lastIndex(where: { !$0.isWhitespace }) else { return nil }
+            return line[start...end]
+        }
+    }
+
+    func replacingBodies(with translations: [Int: String]) -> String {
+        var result = ""
+        var cursor = source.startIndex
+        for (index, body) in bodies.enumerated() {
+            result += source[cursor..<body.startIndex]
+            result += translations[index] ?? String(body)
+            cursor = body.endIndex
+        }
+        return result + source[cursor...]
+    }
+
+    func restoringLayout(of translated: String) -> String? {
+        let target = Self(translated)
+        guard bodies.count == target.bodies.count else { return nil }
+        return replacingBodies(with: Dictionary(uniqueKeysWithValues:
+            target.bodies.enumerated().map { ($0.offset, String($0.element)) }))
+    }
+
+    static func singleLine(_ translated: String) -> String {
+        Self(translated).bodies.map(String.init).joined(separator: " ")
+    }
+}
+
 nonisolated struct ProtectedPrompt: Sendable {
     // Fenced blocks take precedence over inline spans. Protect an unclosed fence through EOF.
     private static let codePattern = try! NSRegularExpression(
@@ -157,33 +195,43 @@ nonisolated struct ProtectedPrompt: Sendable {
         pair.source != pair.target && prose.contains { Self.hasTranslatableProse($0, in: pair) }
     }
 
-    // If the system changes a placeholder, translate the prose around each code span independently.
+    // If placeholders or line structure change, translate prose lines in a single batch.
     @MainActor func translateProse(in pair: TranslationPair, with session: TranslationSession) async throws -> String {
-        var requests: [TranslationSession.Request] = []
-        var ranges: [Int: Range<String.Index>] = [:]
-        for (index, segment) in prose.enumerated() where Self.hasTranslatableProse(segment, in: pair) {
-            guard let start = segment.firstIndex(where: { !$0.isWhitespace }),
-                  let end = segment.lastIndex(where: { !$0.isWhitespace }) else { continue }
-            let range = start..<segment.index(after: end)
-            ranges[index] = range
-            requests.append(.init(sourceText: String(segment[range]), clientIdentifier: String(index)))
+        try await translateProse(in: pair) { requests in
+            let responses = try await session.translations(from: requests)
+            return Dictionary(responses.compactMap { response in
+                response.clientIdentifier.map { ($0, response.targetText) }
+            }, uniquingKeysWith: { _, last in last })
         }
-        let responses = requests.isEmpty ? [] : try await session.translations(from: requests)
+    }
+
+    @MainActor func translateProse(in pair: TranslationPair,
+                                  using translate: ([TranslationSession.Request]) async throws -> [String: String]) async throws -> String {
+        let layouts = prose.map { PromptLineLayout(String($0)) }
+        var requests: [TranslationSession.Request] = []
+        for (segment, layout) in layouts.enumerated() {
+            for (line, body) in layout.bodies.enumerated() where Self.hasTranslatableProse(body, in: pair) {
+                requests.append(.init(sourceText: String(body), clientIdentifier: "\(segment):\(line)"))
+            }
+        }
+        let responses = requests.isEmpty ? [:] : try await translate(requests)
         try Task.checkCancellation()
-        var translated: [Int: String] = [:]
-        for response in responses {
-            if let id = response.clientIdentifier, let index = Int(id) { translated[index] = response.targetText }
+        var translated: [String: String] = [:]
+        for request in requests {
+            guard let id = request.clientIdentifier, let response = responses[id] else {
+                throw TranslationFailure.emptyResponse
+            }
+            let line = PromptLineLayout.singleLine(response)
+            guard !line.isEmpty else { throw TranslationFailure.emptyResponse }
+            translated[id] = line
         }
         var result = ""
-        for (index, segment) in prose.enumerated() {
-            if let range = ranges[index] {
-                guard let translation = translated[index]?.trimmingCharacters(in: .whitespacesAndNewlines),
-                      !translation.isEmpty else { throw TranslationFailure.emptyResponse }
-                result += segment[..<range.lowerBound] + translation + segment[range.upperBound...]
-            } else {
-                result += segment
-            }
-            if index < fragments.count { result += fragments[index].code }
+        for (segment, layout) in layouts.enumerated() {
+            let lines = Dictionary(uniqueKeysWithValues: layout.bodies.indices.compactMap { line in
+                translated["\(segment):\(line)"].map { (line, $0) }
+            })
+            result += layout.replacingBodies(with: lines)
+            if segment < fragments.count { result += fragments[segment].code }
         }
         return result
     }
@@ -202,6 +250,9 @@ nonisolated struct ProtectedPrompt: Sendable {
     }
 
     func restore(in translated: String) throws -> String {
+        guard let translated = PromptLineLayout(source).restoringLayout(of: translated) else {
+            throw TranslationFailure.damagedCode
+        }
         guard !fragments.isEmpty else { return translated }
         var result = ""
         var cursor = translated.startIndex

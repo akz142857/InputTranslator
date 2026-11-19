@@ -35,6 +35,8 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     private var besideLauncher = false
     private var preferredDockSize: NSSize?
     private var draggingGrip = false
+    private var positioningDockedPanel = false
+    private var nativeDragMonitor: Task<Void, Never>?
     private(set) var isClosingFromDock = false
 
     override var canBecomeKey: Bool { true }
@@ -99,7 +101,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         let wasDocked = dockLayout != nil
         dockLayout = layout
         self.besideLauncher = besideLauncher
-        isMovable = layout == nil
+        isMovable = true
         if let layout {
             let savedSize = controller?.settings.dockedPanelPlacement?.frame.size
             let size = wasDocked ? preferredDockSize ?? frame.size : savedSize ?? frame.size
@@ -115,6 +117,9 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     }
 
     private func positionDockedPanel(in layout: TopDockLayout, size: NSSize) {
+        let wasPositioning = positioningDockedPanel
+        positioningDockedPanel = true
+        defer { positioningDockedPanel = wasPositioning }
         let target = layout.panelFrame(size: size, besideLauncher: besideLauncher)
         // Keep the user's window size when available space temporarily limits it.
         preferredDockSize = target.size == size ? nil : size
@@ -158,6 +163,12 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     }
 
     override func orderOut(_ sender: Any?) {
+        nativeDragMonitor?.cancel()
+        nativeDragMonitor = nil
+        if draggingGrip {
+            draggingGrip = false
+            savePlacement()
+        }
         super.orderOut(sender)
         finishDockMotion()
     }
@@ -197,8 +208,26 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
         controller?.topDockPanelResignedKey()
     }
 
+    func windowWillMove(_ notification: Notification) {
+        // Native title-bar drags do not necessarily deliver mouseUp to this window.
+        // Ignore layout, resize and custom grip moves; detach only for an actual user drag.
+        guard hasPresented, !positioningDockedPanel, !draggingGrip,
+              contentView?.inLiveResize != true, NSEvent.pressedMouseButtons & 1 != 0,
+              beginGripDrag() else { return }
+        nativeDragMonitor?.cancel()
+        nativeDragMonitor = Task { @MainActor [weak self] in
+            while NSEvent.pressedMouseButtons & 1 != 0 {
+                guard self != nil else { return }
+                do { try await Task.sleep(for: .milliseconds(50)) } catch { return }
+            }
+            guard !Task.isCancelled else { return }
+            self?.endGripDrag(at: NSEvent.mouseLocation)
+            self?.nativeDragMonitor = nil
+        }
+    }
+
     func beginGripDrag() -> Bool {
-        guard let controller, controller.settings.topDockEnabled, controller.canSwitchMode else { return false }
+        guard let controller, !isClosingFromDock else { return false }
         savePlacement()
         draggingGrip = true
         controller.detachTopDockForDrag()
@@ -206,7 +235,7 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
     }
 
     func endGripDrag(at pointer: NSPoint) {
-        if let destination = NSScreen.containing(pointer),
+        if controller?.settings.topDockEnabled == true, let destination = NSScreen.containing(pointer),
            let target = controller?.topDockLayout(on: destination).launcherFrame,
            target.insetBy(dx: -26, dy: -12).contains(pointer) {
             controller?.dockPanel(on: destination)
@@ -268,10 +297,17 @@ final class FloatingPanel: NSPanel, NSWindowDelegate {
 }
 
 struct PanelDragHandle: NSViewRepresentable {
-    func makeNSView(context: Context) -> DragView { DragView() }
+    var showsDragCursor = true
+
+    func makeNSView(context: Context) -> DragView {
+        let view = DragView()
+        view.showsDragCursor = showsDragCursor
+        return view
+    }
     func updateNSView(_ view: DragView, context: Context) {}
 
     final class DragView: NSView {
+        var showsDragCursor = true
         private var mouseStart: NSPoint?
         private var frameOrigin: NSPoint = .zero
         private var dragging = false
@@ -279,7 +315,7 @@ struct PanelDragHandle: NSViewRepresentable {
         override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
         override func resetCursorRects() {
-            addCursorRect(bounds, cursor: .openHand)
+            if showsDragCursor { addCursorRect(bounds, cursor: .openHand) }
         }
 
         override func mouseDown(with event: NSEvent) {

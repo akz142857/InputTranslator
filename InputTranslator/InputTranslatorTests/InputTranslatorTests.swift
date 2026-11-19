@@ -143,6 +143,95 @@ final class InputTranslatorTests: XCTestCase {
         XCTAssertThrowsError(try prompt.restore(in: prompt.source.replacingOccurrences(of: "\n", with: " ")))
     }
 
+    func testTranslatedNumberedLinesDoNotGainBlankParagraphs() throws {
+        let source = "1、对 halro-rate-limit-recovery 推送到远程\n2、对当前项目 halro commit and push，open pr"
+        let translated = "1. Push halro-rate-limit-recovery to the remote\n\n2. Commit and push the current halro project, open a PR"
+        XCTAssertEqual(try ProtectedPrompt(source).restore(in: translated),
+                       translated.replacingOccurrences(of: "\n\n", with: "\n"))
+        XCTAssertEqual(try ProtectedPrompt("First line\nSecond line").restore(in: "第一行\n\n第二行"), "第一行\n第二行")
+    }
+
+    func testTranslationKeepsOriginalIndentationBlankLinesAndLineEndings() throws {
+        let source = "  第一行  \r\n\t\r\n\r\n\t第二行\t\r\n"
+        XCTAssertEqual(try ProtectedPrompt(source).restore(in: "\nFirst line\n\nSecond line\n"),
+                       "  First line  \r\n\t\r\n\r\n\tSecond line\t\r\n")
+    }
+
+    func testTranslationRestoresLayoutBeforeReinsertingExactCode() throws {
+        let source = "检查 `user_id`\n\n```sh\n  echo '保留'\n\n  printf hello\n```\n最后一行\n"
+        let prompt = ProtectedPrompt(source)
+        let translated = prompt.source.replacingOccurrences(of: "检查", with: "Check")
+            .replacingOccurrences(of: "最后一行", with: "Last line")
+            .replacingOccurrences(of: "\n", with: "\n\n")
+        XCTAssertEqual(try prompt.restore(in: translated), source.replacingOccurrences(of: "检查", with: "Check")
+            .replacingOccurrences(of: "最后一行", with: "Last line"))
+    }
+
+    func testChangedContentLineCountRequiresFallbackWithoutDroppingText() {
+        XCTAssertThrowsError(try ProtectedPrompt("第一行\n第二行").restore(in: "Merged translation"))
+        XCTAssertThrowsError(try ProtectedPrompt("一行").restore(in: "First part\nSecond part"))
+    }
+
+    @MainActor func testProseFallbackBatchesLinesAndPreservesCodeAndBlankLines() async throws {
+        let source = "  第一行\r\n\r\n\t第二行 `literal`\r\n```sh\n  echo 保留\n\n```\r\n第三行\r\n"
+        var batches = 0
+        let result = try await ProtectedPrompt(source).translateProse(in: .chineseToEnglish) { requests in
+            batches += 1
+            XCTAssertEqual(requests.map(\.sourceText), ["第一行", "第二行", "第三行"])
+            return Dictionary(uniqueKeysWithValues: requests.reversed().map {
+                ($0.clientIdentifier!, "Translated\n\n" + $0.sourceText)
+            })
+        }
+        XCTAssertEqual(batches, 1)
+        XCTAssertEqual(result, "  Translated 第一行\r\n\r\n\tTranslated 第二行 `literal`\r\n```sh\n  echo 保留\n\n```\r\nTranslated 第三行\r\n")
+        do {
+            _ = try await ProtectedPrompt("检查\n日志").translateProse(in: .chineseToEnglish) { _ in [:] }
+            XCTFail("An incomplete response must not silently omit a line")
+        } catch TranslationFailure.emptyResponse { }
+    }
+
+    @MainActor func testInstalledNumberedTranslationKeepsTwoAdjacentLines() async throws {
+        let pair = TranslationPair.chineseToEnglish
+        let status = await LanguageAvailability().status(from: pair.source.localeLanguage, to: pair.target.localeLanguage)
+        try XCTSkipUnless(status == .installed, "Chinese and English system translation models are required")
+        let controller = InputController(settings: try isolatedSettings())
+        controller.showComposer()
+        defer { controller.dismissPanel() }
+        let source = "1、对 halro-rate-limit-recovery 推送到远程\n2、对当前项目 halro commit and push，open pr"
+        controller.text = source
+        await waitForResult(controller)
+        XCTAssertFalse(controller.result.isEmpty, controller.message ?? "No translation")
+        XCTAssertEqual(controller.result.filter(\.isNewline).count, 1)
+        XCTAssertEqual(controller.text, source)
+    }
+
+    @MainActor func testHeaderDraggingDetachesDockAndPreservesSizeAndPin() throws {
+        let existingWindows = Set(NSApp.windows)
+        let settings = try isolatedSettings()
+        settings.panelPinned = true
+        let controller = InputController(settings: settings)
+        controller.showComposer()
+        defer { controller.dismissPanel() }
+        let panel = try newFloatingPanel(excluding: existingWindows)
+        XCTAssertTrue(panel.isMovable, "The native title bar must remain draggable while docked")
+        let size = panel.frame.size
+        XCTAssertTrue(panel.beginGripDrag())
+        XCTAssertNil(panel.dockLayout)
+        XCTAssertTrue(settings.panelDetached)
+        panel.setFrameOrigin(NSPoint(x: panel.frame.minX + 20, y: panel.frame.minY - 40))
+        panel.endGripDrag(at: NSPoint(x: -100_000, y: -100_000))
+        XCTAssertEqual(panel.frame.size, size)
+        XCTAssertEqual(panel.level, .floating)
+        XCTAssertTrue(settings.panelPinned)
+        XCTAssertEqual(settings.pinnedPanelPlacement?.frame, panel.frame)
+
+        settings.topDockEnabled = false
+        XCTAssertTrue(panel.beginGripDrag())
+        panel.endGripDrag(at: NSEvent.mouseLocation)
+        XCTAssertFalse(settings.topDockEnabled)
+        XCTAssertNil(panel.dockLayout)
+    }
+
     @MainActor func testReplyMarkdownPreservesAssistantStructureAndLiteralCode() {
         let source = """
         # Release

@@ -27,9 +27,9 @@ See [Publishing an app update](RELEASING.md) for the release workflow.
 
 ## Write a prompt
 
-With the destination input focused, press **⌘⌥Space** to open the prompt panel. After you pause typing, the translated preview appears below the editor. If you use an input method, translation starts after you commit the composed text.
+With the destination input focused, press **⌘⌥Space** to open the prompt panel. After you pause typing, the translated preview appears below the editor. If you use an input method, translation starts after you commit the composed text. The preview preserves your original line breaks, blank lines, indentation, and protected code.
 
-The language button beside **Write Prompt / Read Reply** shows the current mode's translation direction. Click it to swap the languages while keeping your input. The language choice is remembered when you reopen the app. With Top Dock enabled, drag the blank toolbar area to move or detach the panel.
+The language button beside **Write Prompt / Read Reply** shows the current mode's translation direction. Click it to swap the languages while keeping your input. The language choice is remembered when you reopen the app. Drag the title bar or blank toolbar area to move the panel; a docked panel detaches when dragged.
 
 Press **⌘↵** or click **Paste to [app name]** to paste a single-line translation. If translation is running, the shortcut waits for the result. For multiple lines, press **⌘↵** again to confirm the paste. You can also copy the translation and paste it yourself.
 
